@@ -4,6 +4,14 @@ import argparse
 import requests
 import io
 import os
+import numpy as np
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import json
+from datetime import datetime
+
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 class AnalyseDVF:
     def __init__(self, url_csv=None, chemin_fichier=None):
@@ -203,6 +211,168 @@ class AnalyseDVF:
             
         return resultats_par_parcelle
 
+def load_data(file_path):
+    df = pd.read_csv(file_path, delimiter=',')
+    # Filter for only apartments (type_local = 'Appartement')
+    df_apparts = df[df['type_local'] == 'Appartement']
+    
+    # Convert date_mutation to datetime
+    df_apparts['date_mutation'] = pd.to_datetime(df_apparts['date_mutation'])
+    
+    # Make sure valeur_fonciere and surface_reelle_bati are numeric
+    df_apparts['valeur_fonciere'] = pd.to_numeric(df_apparts['valeur_fonciere'], errors='coerce')
+    df_apparts['surface_reelle_bati'] = pd.to_numeric(df_apparts['surface_reelle_bati'], errors='coerce')
+    
+    # Calculate price per square meter
+    df_apparts['prix_m2'] = df_apparts['valeur_fonciere'] / df_apparts['surface_reelle_bati']
+    
+    return df_apparts
+
+def load_data_from_url(url):
+    """Load DVF data directly from a URL, supporting gzipped files"""
+    try:
+        response = requests.get(url)
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch data from URL: {response.status_code}")
+        
+        # Determine if the content is gzipped
+        if url.endswith('.gz'):
+            import gzip
+            # Load CSV data from gzipped content
+            csv_data = gzip.decompress(response.content)
+            df = pd.read_csv(io.BytesIO(csv_data), delimiter=',')
+        else:
+            # Load regular CSV data from response content
+            csv_data = io.StringIO(response.content.decode('utf-8'))
+            df = pd.read_csv(csv_data, delimiter=',')
+        
+        # Filter for only apartments (type_local = 'Appartement')
+        df_apparts = df[df['type_local'] == 'Appartement']
+        
+        # Convert date_mutation to datetime
+        df_apparts['date_mutation'] = pd.to_datetime(df_apparts['date_mutation'])
+        
+        # Make sure valeur_fonciere and surface_reelle_bati are numeric
+        df_apparts['valeur_fonciere'] = pd.to_numeric(df_apparts['valeur_fonciere'], errors='coerce')
+        df_apparts['surface_reelle_bati'] = pd.to_numeric(df_apparts['surface_reelle_bati'], errors='coerce')
+        
+        # Calculate price per square meter
+        df_apparts['prix_m2'] = df_apparts['valeur_fonciere'] / df_apparts['surface_reelle_bati']
+        
+        return df_apparts
+    except Exception as e:
+        raise Exception(f"Error loading data from URL: {str(e)}")
+
+@app.route('/api/dvf', methods=['GET'])
+def get_dvf_data():
+    try:
+        print("API call received to /api/dvf")
+        # Set default URL to the new one provided
+        dvf_url = os.getenv('DVF_API_URL', 'https://files.data.gouv.fr/geo-dvf/latest/csv/2024/full.csv.gz')
+        print(f"Using data source: {dvf_url}")
+        
+        # Fetch data from URL
+        print("Loading data from URL...")
+        df = load_data_from_url(dvf_url)
+        print(f"Data loaded successfully, {len(df)} records found")
+        
+        # Apply filters based on query parameters
+        # Get filter parameters from the request
+        parcelles = request.args.get('parcelles')
+        type_local = request.args.get('type')
+        min_surface = request.args.get('min')
+        max_surface = request.args.get('max')
+        option_garage = request.args.get('garage')
+        print(f"Filters: parcelles={parcelles}, type={type_local}, min={min_surface}, max={max_surface}, garage={option_garage}")
+        
+        # Apply filters
+        if parcelles:
+            parcelles_list = [p.strip() for p in parcelles.split(',')]
+            df = df[df['id_parcelle'].isin(parcelles_list)]
+            print(f"After parcelles filter: {len(df)} records")
+            
+        if type_local:
+            df = df[df['type_local'] == type_local]
+            print(f"After type filter: {len(df)} records")
+            
+        if min_surface:
+            try:
+                min_surface = float(min_surface)
+                df = df[df['surface_reelle_bati'] >= min_surface]
+                print(f"After min surface filter: {len(df)} records")
+            except ValueError:
+                print(f"Invalid min_surface value: {min_surface}")
+                
+        if max_surface:
+            try:
+                max_surface = float(max_surface)
+                df = df[df['surface_reelle_bati'] <= max_surface]
+                print(f"After max surface filter: {len(df)} records")
+            except ValueError:
+                print(f"Invalid max_surface value: {max_surface}")
+                
+        if option_garage == 'avec':
+            # This would need mutation IDs with garage dependencies
+            # Simplified version - assuming we don't have this data structure in the sample
+            print("Garage filter not implemented yet")
+            
+        # Total number of transactions
+        nombre_transactions = len(df)
+        print(f"Total filtered transactions: {nombre_transactions}")
+        
+        # Calculate statistics
+        nombre_transactions_affiches = min(len(df), 100000000000000)  # Limit displayed transactions to 100
+        
+        # Calculate statistics on the entire dataset
+        prix_moyen = int(df['valeur_fonciere'].mean()) if not df.empty else 0
+        prix_median = int(df['valeur_fonciere'].median()) if not df.empty else 0
+        prix_m2_moyen = int(df['prix_m2'].mean()) if not df.empty else 0
+        prix_m2_median = int(df['prix_m2'].median()) if not df.empty else 0
+        
+        print(f"Statistics calculated: prix_moyen={prix_moyen}, prix_median={prix_median}")
+        
+        # Sample data for display if needed
+        display_df = df
+        if len(df) > 100:
+            display_df = df.sample(n=100, random_state=42)
+            print(f"Sampled {len(display_df)} transactions for display")
+            
+        # Format transactions data
+        transactions = []
+        for _, row in display_df.iterrows():
+            transaction = {
+                'date': row['date_mutation'].strftime('%d/%m/%Y'),
+                'prix': int(row['valeur_fonciere']),
+                'surface': int(row['surface_reelle_bati']),
+                'prix_m2': int(row['prix_m2'])
+            }
+            transactions.append(transaction)
+        
+        # Create response
+        response = {
+            'nombre_transactions': nombre_transactions,
+            'nombre_transactions_affiches': len(transactions),
+            'prix_moyen': prix_moyen,
+            'prix_median': prix_median,
+            'prix_m2_moyen': prix_m2_moyen,
+            'prix_m2_median': prix_m2_median,
+            'transactions': transactions
+        }
+        
+        print("Sending response to client")
+        return jsonify(response)
+    
+    except Exception as e:
+        error_message = f"Error processing request: {str(e)}"
+        print(error_message)
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': error_message}), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy'})
+
 def main():
     parser = argparse.ArgumentParser(description='Analyse des prix des biens immobiliers à partir des données DVF')
     parser.add_argument('--url', type=str, help='URL du fichier CSV distant contenant les données DVF')
@@ -286,4 +456,12 @@ def afficher_resultats(resultats, parcelles, type_local, min_m2, max_m2, option_
         print("Aucune transaction trouvée correspondant aux critères")
 
 if __name__ == "__main__":
-    main() 
+    # Check if we should run the API or the CLI
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == '--api':
+        # Run as API server
+        port = int(os.getenv('PORT', 6644))
+        app.run(debug=True, host='0.0.0.0', port=port)
+    else:
+        # Run as CLI tool
+        main() 

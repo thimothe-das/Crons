@@ -86,4 +86,106 @@ Lorsque l'option `--detail` est utilisée avec plusieurs parcelles, le script af
 
 ## Note
 
-La première exécution avec une URL téléchargera les données et les stockera localement pour les utilisations ultérieures. 
+La première exécution avec une URL téléchargera les données et les stockera localement pour les utilisations ultérieures.
+
+# DVF Data API and Viewer
+
+This project provides tools for analyzing and visualizing property transaction data from the DVF (Demande de Valeurs Foncières) dataset.
+
+## Components
+
+1. **Python Backend API**:
+   - Processes DVF CSV data
+   - Calculates statistical information (average price, median price, etc.)
+   - Exposes data through a RESTful API
+   - Located in `prix_moyen_appartements.py`
+
+2. **Next.js Frontend**:
+   - Modern web interface for visualizing the data
+   - Dashboard with key statistics
+   - Detailed transaction listing
+   - Located in the `dvf-viewer` directory
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.8+
+- Node.js and npm
+
+### Setup
+
+1. **Create a Python virtual environment**:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install flask pandas requests flask-cors
+```
+
+2. **Place your DVF data file**:
+   - Ensure you have a `dvf.csv` file in the main directory
+
+3. **Launch the application**:
+```bash
+./start.sh
+```
+
+This will:
+- Start the Python API server
+- Configure the Next.js app to use the API
+- Start the Next.js development server
+
+### Accessing the Application
+
+- **Web Interface**: Open http://localhost:3000 in your browser
+- **Dashboard**: http://localhost:3000/dashboard
+- **Direct API Access**: http://localhost:6644/api/dvf
+
+## API Endpoints
+
+### GET /api/dvf
+
+Returns statistics about apartment transactions from the DVF data.
+
+Example response:
+
+```json
+{
+  "nombre_transactions": 24,
+  "prix_moyen": 285000,
+  "prix_median": 265000,
+  "prix_m2_moyen": 4250,
+  "prix_m2_median": 4100,
+  "transactions": [
+    {
+      "date": "20/01/2023",
+      "prix": 255000,
+      "surface": 64,
+      "prix_m2": 3984
+    },
+    ...
+  ]
+}
+```
+
+### GET /api/health
+
+Health check endpoint.
+
+Example response:
+
+```json
+{
+  "status": "healthy"
+}
+```
+
+## Testing
+
+You can test the API separately using:
+
+```bash
+python test_api.py
+```
+
+This will verify that the API can read the DVF data and return properly formatted statistics. 
