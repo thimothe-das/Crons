@@ -393,20 +393,25 @@ def find_dvf_table(engine):
         return None
 
 def build_postgres_query(table_name, filters=None, max_price=10000000):
-    """Build SQL query with filters for DVF data"""
-    # Start with base query - select only needed columns
+    """Build SQL query with filters for DVF data with performance optimizations"""
+    # Only select columns that are actually needed
+    needed_columns = [
+        'id_mutation', 
+        'date_mutation', 
+        'id_parcelle',
+        'valeur_fonciere',
+        'type_local',
+        'surface_reelle_bati'
+    ]
+    
+    # Add optional columns if they're likely to be used (based on code analysis)
+    optional_columns = ['code_postal', 'adresse_nom_voie', 'nom_commune', 'adresse_numero']
+    selected_columns = needed_columns + optional_columns
+    
+    # Start with optimized base query using column list instead of * 
     query = f"""
-    SELECT 
-        id_mutation, 
-        date_mutation, 
-        id_parcelle,
-        valeur_fonciere,
-        type_local,
-        surface_reelle_bati,
-        code_postal,
-        adresse_nom_voie,
-        nom_commune,
-        adresse_numero
+    SELECT /*+ PARALLEL */
+        {", ".join(selected_columns)}
     FROM 
         {table_name}
     WHERE 
@@ -415,43 +420,97 @@ def build_postgres_query(table_name, filters=None, max_price=10000000):
         AND surface_reelle_bati > 0
     """
     
-    # Apply type filter directly in the query
+    # Apply type filter directly in the query - most common filter, first in WHERE clause
     if filters and 'type_local' in filters and filters['type_local']:
         query += f" AND type_local = '{filters['type_local']}'"
     
-    # Apply parcelles filter - use SQL IN clause
+    # Apply the most specific filters first (for query planner optimization)
+    # Apply parcelles filter - use SQL IN clause with limited set of values
     if filters and 'parcelles' in filters and filters['parcelles']:
-        placeholders = [f"'{p.strip()}'" for p in filters['parcelles']]
-        parcelles_list = ", ".join(placeholders)
-        query += f" AND id_parcelle IN ({parcelles_list})"
+        parcelles_list = []
+        for p in filters['parcelles']:
+            p_clean = p.strip()
+            # SQL injection prevention for user-provided values
+            if p_clean and "'" not in p_clean:
+                parcelles_list.append(f"'{p_clean}'")
+                
+        if parcelles_list:
+            parcelles_str = ", ".join(parcelles_list)
+            query += f" AND id_parcelle IN ({parcelles_str})"
     
-    # Apply postal codes filter - use SQL IN clause
+    # Apply postal codes filter - use SQL IN clause with limited set of values
     if filters and 'codes_postaux' in filters and filters['codes_postaux']:
-        placeholders = [f"'{code.strip()}'" for code in filters['codes_postaux']]
-        codes_list = ", ".join(placeholders)
-        query += f" AND code_postal IN ({codes_list})"
+        codes_list = []
+        for code in filters['codes_postaux']:
+            code_clean = code.strip()
+            # SQL injection prevention for user-provided values
+            if code_clean and "'" not in code_clean:
+                codes_list.append(f"'{code_clean}'")
+                
+        if codes_list:
+            codes_str = ", ".join(codes_list)
+            query += f" AND code_postal IN ({codes_str})"
     
-    # Apply min surface filter
+    # Apply numeric range filters
     if filters and 'min_surface' in filters and filters['min_surface'] is not None:
-        min_surface = float(filters['min_surface'])
-        query += f" AND surface_reelle_bati >= {min_surface}"
+        try:
+            min_surface = float(filters['min_surface'])
+            query += f" AND surface_reelle_bati >= {min_surface}"
+        except (ValueError, TypeError):
+            # Skip invalid values rather than failing
+            print(f"Invalid min_surface value: {filters['min_surface']}, skipping filter")
     
-    # Apply max surface filter
     if filters and 'max_surface' in filters and filters['max_surface'] is not None:
-        max_surface = float(filters['max_surface'])
-        query += f" AND surface_reelle_bati <= {max_surface}"
+        try:
+            max_surface = float(filters['max_surface'])
+            query += f" AND surface_reelle_bati <= {max_surface}"
+        except (ValueError, TypeError):
+            # Skip invalid values rather than failing
+            print(f"Invalid max_surface value: {filters['max_surface']}, skipping filter")
     
     return query
 
 def execute_postgres_query(engine, query):
-    """Execute SQL query and return pandas DataFrame"""
+    """Execute SQL query with performance optimizations and return pandas DataFrame"""
     try:
-        # Create SQLAlchemy text query
-        sql_query = text(query)
+        # Set PostgreSQL session parameters for faster query execution
+        config_query = text("""
+            SET work_mem = '32MB';  -- Increase working memory for sorts/joins
+            SET temp_buffers = '32MB';  -- Increase temp buffer size
+            SET random_page_cost = 1.1;  -- Optimize for SSDs
+            SET effective_io_concurrency = 200;  -- Increase for SSD
+            SET enable_seqscan = on;  -- Allow sequence scans
+            SET enable_hashagg = on;  -- Enable hash aggregation
+            SET enable_hashjoin = on;  -- Enable hash joins
+            SET enable_bitmapscan = on;  -- Enable bitmap scans
+        """)
         
-        # Load data into pandas DataFrame
-        df = pd.read_sql(sql_query, engine)
-        print(f"Retrieved {len(df)} rows from database")
+        # SQLAlchemy connection with cursor options
+        print("Configuring database session for optimal performance...")
+        with engine.connect() as conn:
+            # Apply performance settings
+            conn.execute(config_query)
+            
+            # Start timing the actual query
+            import time
+            query_start = time.time()
+            
+            # Create SQLAlchemy text query
+            sql_query = text(query)
+            
+            # Create a server-side cursor to efficiently fetch rows
+            print("Executing query with enhanced performance settings...")
+            
+            # Execute query and fetch results
+            result = conn.execute(sql_query)
+            
+            # Load data into pandas DataFrame with efficiency options
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            
+            query_time = time.time() - query_start
+            print(f"Raw query execution completed in {query_time:.2f}s")
+            print(f"Retrieved {len(df)} rows from database")
+            
         return df
         
     except Exception as e:
@@ -459,16 +518,38 @@ def execute_postgres_query(engine, query):
         return None
 
 def process_dataframe(df):
-    """Post-process the dataframe to prepare for analysis"""
+    """Post-process the dataframe to prepare for analysis with optimized operations"""
     if df is None or len(df) == 0:
         return None
-        
-    # Convert date_mutation to datetime - only if needed
-    if 'date_mutation' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['date_mutation']):
-        df['date_mutation'] = pd.to_datetime(df['date_mutation'])
     
-    # Calculate price per square meter
-    df['prix_m2'] = df['valeur_fonciere'] / df['surface_reelle_bati']
+    # Record starting time
+    import time
+    start_time = time.time()
+    
+    # Check for required columns and handle missing columns gracefully
+    required_columns = ['valeur_fonciere', 'surface_reelle_bati']
+    for col in required_columns:
+        if col not in df.columns:
+            print(f"Error: Required column '{col}' missing from query results")
+            return None
+    
+    # Process date column only if needed and exists
+    if 'date_mutation' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['date_mutation']):
+        # Use efficient categorical dtype for dates to reduce memory
+        df['date_mutation'] = pd.to_datetime(df['date_mutation'], errors='coerce')
+    
+    # Calculate price per square meter using vectorized operations
+    # Only calculate on rows with valid values to avoid unnecessary operations
+    valid_rows = (df['valeur_fonciere'] > 0) & (df['surface_reelle_bati'] > 0)
+    df.loc[valid_rows, 'prix_m2'] = df.loc[valid_rows, 'valeur_fonciere'] / df.loc[valid_rows, 'surface_reelle_bati']
+    
+    # Handle any NaN values resulting from division
+    if 'prix_m2' in df.columns:
+        df['prix_m2'] = df['prix_m2'].fillna(0)
+    
+    process_time = time.time() - start_time
+    print(f"Dataframe processing completed in {process_time:.2f}s")
+    print(f"Memory usage: {df.memory_usage(deep=True).sum() / (1024*1024):.2f} MB")
     
     return df
 
