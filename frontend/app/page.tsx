@@ -6,10 +6,14 @@ import {
   Building2,
   Filter,
   Home,
+  LocationEdit,
   MapPin,
   Maximize2,
   Minimize2,
   ParkingCircle,
+  Pin,
+  Plus,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -33,15 +37,18 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
+  const [newPostalCode, setNewPostalCode] = useState("");
   const [filters, setFilters] = useState({
     parcelle: "",
     type: "Appartement",
     minArea: "0",
     maxArea: "",
     garage: false,
+    codesPostaux: [] as string[],
   });
   const [results, setResults] = useState<null | {
     nombre_transactions: number;
@@ -54,6 +61,11 @@ export default function DashboardPage() {
       prix: number;
       surface: number;
       prix_m2: number;
+      adresse_nom_voie: string;
+      commune: string;
+      code_postal: string;
+      adresse_complete: string;
+      numero: string;
     }>;
     nombre_transactions_affiches: number;
   }>(null);
@@ -61,8 +73,47 @@ export default function DashboardPage() {
   // API URL
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:6644";
 
-  const handleFilterChange = (key: string, value: string | boolean) => {
+  const handleFilterChange = (
+    key: string,
+    value: string | boolean | string[]
+  ) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleAddPostalCode = () => {
+    if (!newPostalCode) return;
+
+    // Basic validation for French postal codes (5 digits)
+    if (!/^\d{5}$/.test(newPostalCode)) {
+      toast.error("Format invalide", {
+        description: "Le code postal doit contenir 5 chiffres",
+      });
+      return;
+    }
+
+    // Check if already added
+    if (filters.codesPostaux.includes(newPostalCode)) {
+      toast.error("Code postal déjà ajouté", {
+        description: `Le code postal ${newPostalCode} est déjà dans la liste`,
+      });
+      return;
+    }
+
+    // Add to list
+    setFilters((prev) => ({
+      ...prev,
+      codesPostaux: [...prev.codesPostaux, newPostalCode],
+    }));
+
+    // Clear input
+    setNewPostalCode("");
+  };
+
+  const handleRemovePostalCode = (codeToRemove: string) => {
+    setFilters((prev) => ({
+      ...prev,
+      codesPostaux: prev.codesPostaux.filter((code) => code !== codeToRemove),
+    }));
   };
 
   const handleAnalyze = async () => {
@@ -89,6 +140,10 @@ export default function DashboardPage() {
 
       if (filters.garage) {
         params.append("garage", "avec");
+      }
+
+      if (filters.codesPostaux.length > 0) {
+        params.append("codes_postaux", filters.codesPostaux.join(","));
       }
 
       // Fetch data from the real API
@@ -187,7 +242,54 @@ export default function DashboardPage() {
                   virgules
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="codePostal">Codes Postaux</Label>
+                <div className="flex items-center space-x-2">
+                  <LocationEdit className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="codePostal"
+                    placeholder="ex: 33000"
+                    value={newPostalCode}
+                    onChange={(e) => setNewPostalCode(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddPostalCode();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="outline"
+                    onClick={handleAddPostalCode}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
 
+                {filters.codesPostaux.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {filters.codesPostaux.map((code) => (
+                      <Badge
+                        key={code}
+                        variant="secondary"
+                        className="flex items-center gap-1"
+                      >
+                        {code}
+                        <button
+                          type="button"
+                          className="ml-1 rounded-full hover:bg-muted"
+                          onClick={() => handleRemovePostalCode(code)}
+                        >
+                          <X className="h-3 w-3" />
+                          <span className="sr-only">Supprimer</span>
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="type">Type de bien</Label>
                 <Select
@@ -291,8 +393,14 @@ export default function DashboardPage() {
                       {results.nombre_transactions}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {results.nombre_transactions_affiches} transactions
-                      affichées
+                      {filters.codesPostaux.length > 0 && (
+                        <>
+                          {filters.codesPostaux.length === 1
+                            ? `Code Postal: ${filters.codesPostaux[0]} • `
+                            : `${filters.codesPostaux.length} Codes Postaux • `}
+                        </>
+                      )}
+                      Biens correspondant aux critères
                     </p>
                   </CardContent>
                 </Card>
@@ -499,20 +607,19 @@ export default function DashboardPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="rounded-md border">
-                    <div className="grid grid-cols-4 border-b px-4 py-2 font-medium">
+                    <div className="grid grid-cols-7 border-b px-4 py-2 font-medium">
                       <div>Date</div>
                       <div>Prix</div>
                       <div>Surface</div>
                       <div>Prix/m²</div>
+                      <div>Adresse</div>
+                      <div>Commune</div>
+                      <div>Code Postal</div>
                     </div>
                     <div className="divide-y">
                       {results.transactions.map((transaction, i) => (
-                        <div key={i} className="grid grid-cols-4 px-4 py-3">
-                          <div>
-                            {new Date(transaction.date).toLocaleDateString(
-                              "fr-FR"
-                            )}
-                          </div>
+                        <div key={i} className="grid grid-cols-7 px-4 py-3">
+                          <div>{transaction.date}</div>
                           <div>
                             {transaction.prix.toLocaleString("fr-FR")} €
                           </div>
@@ -520,6 +627,9 @@ export default function DashboardPage() {
                           <div>
                             {transaction.prix_m2.toLocaleString("fr-FR")} €/m²
                           </div>
+                          <div>{transaction.adresse_complete}</div>
+                          <div>{transaction.commune}</div>
+                          <div>{transaction.code_postal}</div>
                         </div>
                       ))}
                     </div>

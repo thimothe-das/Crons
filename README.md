@@ -188,4 +188,107 @@ You can test the API separately using:
 python test_api.py
 ```
 
-This will verify that the API can read the DVF data and return properly formatted statistics. 
+This will verify that the API can read the DVF data and return properly formatted statistics.
+
+# DVF Data PostgreSQL Import
+
+This project sets up a PostgreSQL database and automatically imports French real estate transaction data (DVF - Demandes de Valeurs Foncières) from the official government data source.
+
+## Data Source
+
+The data is fetched from: https://files.data.gouv.fr/geo-dvf/latest/csv/2024/full.csv.gz
+
+## Database Performance Optimization
+
+The project includes optimized database indexing to speed up queries significantly. The following indexes are created automatically:
+
+### Basic Indexes
+- `idx_id_parcelle`: Faster lookups by parcel ID
+- `idx_type_local`: Quicker filtering by property type (apartment, house, etc.)
+- `idx_date_mutation`: Optimized date-based queries
+- `idx_code_postal`: Improved performance for postal code filtering
+
+### Advanced Indexes
+- `idx_type_local_surface`: Composite index for property type and surface area
+- `idx_valeur_fonciere`: Faster price range filtering
+- `idx_code_postal_type_local`: Optimized for location + property type filtering
+- `idx_nom_commune`: Quick searches by commune name
+- `idx_apartments`: Partial index specifically for apartment data
+- `idx_prix_m2`: Functional index for price per square meter calculations
+- `idx_adresse_nom_voie_trgm`: Trigram index for address text search
+- `idx_combined_filters`: Multi-column index for complex filtering combinations
+- `idx_id_mutation`: Index for joining related transaction records
+
+### Applying Indexes to Existing Databases
+
+If you have an existing DVF database, you can apply these optimized indexes by running:
+
+```bash
+python update_indexes.py --host localhost --port 5432 --user dvf_user --password dvf_password --db dvf_data
+```
+
+This script will:
+1. Connect to your PostgreSQL database
+2. Create all required indexes if they don't already exist
+3. Update database statistics to ensure the query planner uses the indexes effectively
+
+These indexes can significantly improve query performance, especially for:
+- Filtering properties by location (postal code, commune)
+- Property type filtering (apartments, houses)
+- Price range searches
+- Surface area filtering
+- Full-text address searches
+- Complex queries with multiple filter conditions
+
+## Accessing the Data
+
+Once imported, you can connect to the PostgreSQL database:
+
+- **Host**: localhost
+- **Port**: 5432
+- **Database**: dvf_data
+- **Username**: dvf_user
+- **Password**: dvf_password
+
+Example connection using psql:
+```
+psql -h localhost -p 5432 -d dvf_data -U dvf_user
+```
+
+## Example Queries
+
+Here are some example SQL queries you can run:
+
+```sql
+-- Count total transactions
+SELECT COUNT(*) FROM dvf_data;
+
+-- Get average price by property type
+SELECT type_local, AVG(valeur_fonciere) as prix_moyen
+FROM dvf_data
+GROUP BY type_local
+ORDER BY prix_moyen DESC;
+
+-- Price per square meter for apartments in Paris
+SELECT 
+  AVG(valeur_fonciere / surface_reelle_bati) as prix_m2_moyen
+FROM dvf_data
+WHERE 
+  type_local = 'Appartement' AND
+  code_postal LIKE '75%';
+```
+
+## Configuration
+
+You can modify the following environment variables in the `docker-compose.yml` file:
+
+- `POSTGRES_USER`: Database username
+- `POSTGRES_PASSWORD`: Database password
+- `POSTGRES_DB`: Database name
+- `CSV_URL`: URL of the CSV data source
+
+## Notes
+
+- The initial import may take some time depending on your internet connection and machine performance
+- The database will persist data in a Docker volume named `postgres_data`
+- The import process is optimized to handle large datasets with progress reporting 

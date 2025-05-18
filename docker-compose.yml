@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: dvf-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dvf_user
+      POSTGRES_PASSWORD: dvf_password
+      POSTGRES_DB: dvf_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dvf_user -d dvf_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  data-importer:
+    build:
+      context: ./data-importer
+    container_name: dvf-importer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: dvf_user
+      POSTGRES_PASSWORD: dvf_password
+      POSTGRES_DB: dvf_data
+      POSTGRES_HOST: postgres
+      YEARS_TO_IMPORT: "2020,2021,2022,2023,2024"
+
+volumes:
+  postgres_data:

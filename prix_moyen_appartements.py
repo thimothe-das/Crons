@@ -9,9 +9,23 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import json
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import sqlalchemy
+from sqlalchemy import create_engine, text
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# PostgreSQL connection settings from environment variables
+DB_USER = os.environ.get('POSTGRES_USER', 'dvf_user')
+DB_PASS = os.environ.get('POSTGRES_PASSWORD', 'dvf_password')
+DB_NAME = os.environ.get('POSTGRES_DB', 'dvf_data')
+DB_HOST = os.environ.get('POSTGRES_HOST', 'postgres')
+DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
+
+# Create the database URI
+DB_URI = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 class AnalyseDVF:
     def __init__(self, url_csv=None, chemin_fichier=None):
@@ -223,14 +237,24 @@ def load_data(file_path):
     df_apparts['valeur_fonciere'] = pd.to_numeric(df_apparts['valeur_fonciere'], errors='coerce')
     df_apparts['surface_reelle_bati'] = pd.to_numeric(df_apparts['surface_reelle_bati'], errors='coerce')
     
+    # Ensure address and commune columns are available (handle potentially missing columns)
+    if 'adresse_nom_voie' not in df_apparts.columns:
+        df_apparts['adresse_nom_voie'] = "Non spécifiée"
+        print("Warning: adresse_nom_voie column not found in data, using default value")
+        
+    if 'nom_commune' not in df_apparts.columns:
+        df_apparts['nom_commune'] = "Non spécifiée"
+        print("Warning: nom_commune column not found in data, using default value")
+    
     # Calculate price per square meter
     df_apparts['prix_m2'] = df_apparts['valeur_fonciere'] / df_apparts['surface_reelle_bati']
     
     return df_apparts
 
-def load_data_from_url(url):
+def load_data_from_url(url, max_price=10000000):  # Default max price of 10 million euros
     """Load DVF data directly from a URL, supporting gzipped files"""
     try:
+        print(f"Loading data from URL: {url}")
         response = requests.get(url)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch data from URL: {response.status_code}")
@@ -256,61 +280,351 @@ def load_data_from_url(url):
         df_apparts['valeur_fonciere'] = pd.to_numeric(df_apparts['valeur_fonciere'], errors='coerce')
         df_apparts['surface_reelle_bati'] = pd.to_numeric(df_apparts['surface_reelle_bati'], errors='coerce')
         
+        # Filter out unreasonably high prices to avoid skewing statistics
+        original_count = len(df_apparts)
+        df_apparts = df_apparts[df_apparts['valeur_fonciere'] <= max_price]
+        if len(df_apparts) < original_count:
+            print(f"Filtered out {original_count - len(df_apparts)} records with prices above {max_price} euros")
+        
+        # Filter out zero or negative prices and areas
+        df_apparts = df_apparts[(df_apparts['valeur_fonciere'] > 0) & (df_apparts['surface_reelle_bati'] > 0)]
+        
+        # Ensure address and commune columns are available (handle potentially missing columns)
+        if 'adresse_nom_voie' not in df_apparts.columns:
+            df_apparts['adresse_nom_voie'] = "Non spécifiée"
+            print("Warning: adresse_nom_voie column not found in data, using default value")
+            
+        if 'nom_commune' not in df_apparts.columns:
+            df_apparts['nom_commune'] = "Non spécifiée"
+            print("Warning: nom_commune column not found in data, using default value")
+            
+        if 'adresse_numero' not in df_apparts.columns:
+            df_apparts['adresse_numero'] = ""
+            print("Warning: adresse_numero column not found in data, using default value")
+        
         # Calculate price per square meter
         df_apparts['prix_m2'] = df_apparts['valeur_fonciere'] / df_apparts['surface_reelle_bati']
         
+        print(f"Data loaded from URL: {len(df_apparts)} valid records")
         return df_apparts
     except Exception as e:
         raise Exception(f"Error loading data from URL: {str(e)}")
+
+def get_database_engine():
+    """Get a connection to the PostgreSQL database"""
+    print("Attempting to connect to PostgreSQL database...")
+    
+    # List of connection configurations to try
+    connection_configs = [
+        # First try Docker service name
+        {
+            'host': DB_HOST,
+            'port': DB_PORT,
+            'user': DB_USER,
+            'password': DB_PASS,
+            'db': DB_NAME
+        },
+        # Then try localhost
+        {
+            'host': 'localhost',
+            'port': DB_PORT,
+            'user': DB_USER,
+            'password': DB_PASS,
+            'db': DB_NAME
+        },
+        # Then try 127.0.0.1 explicitly (bypasses IPv6)
+        {
+            'host': '127.0.0.1',
+            'port': DB_PORT,
+            'user': DB_USER,
+            'password': DB_PASS,
+            'db': DB_NAME
+        },
+        # Finally try standard local postgres credentials as fallback
+        {
+            'host': 'localhost',
+            'port': '5432',
+            'user': 'postgres',
+            'password': 'postgres',
+            'db': 'postgres'
+        }
+    ]
+    
+    for config in connection_configs:
+        try:
+            # Create connection string
+            conn_uri = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['db']}"
+            print(f"Trying to connect to: {config['host']}:{config['port']}/{config['db']} as {config['user']}")
+            
+            # Create engine with shorter timeout
+            engine = create_engine(conn_uri, connect_args={"connect_timeout": 3})
+            
+            # Test connection
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT 1")).fetchone()
+                if result and result[0] == 1:
+                    print(f"✅ Successfully connected to database at {config['host']}:{config['port']}/{config['db']}")
+                    return engine
+        except Exception as e:
+            print(f"❌ Connection failed for {config['host']}: {str(e)}")
+            continue
+    
+    print("⚠️ All database connection attempts failed.")
+    print("Make sure Docker containers are running with: docker-compose up -d postgres")
+    return None
+
+def find_dvf_table(engine):
+    """Find the DVF data table in the database"""
+    try:
+        with engine.connect() as conn:
+            # Check for possible table names based on import scripts
+            tables_to_check = ['dvf_data', 'transactions', 'dvf']
+            
+            for table in tables_to_check:
+                result = conn.execute(text(f"SELECT to_regclass('public.{table}')")).fetchone()
+                if result and result[0] is not None:
+                    print(f"Found data table: {table}")
+                    return table
+            
+            print("No DVF data table found in the database")
+            return None
+    except Exception as e:
+        print(f"Error finding DVF table: {str(e)}")
+        return None
+
+def build_postgres_query(table_name, filters=None, max_price=10000000):
+    """Build SQL query with filters for DVF data"""
+    # Start with base query - select only needed columns
+    query = f"""
+    SELECT 
+        id_mutation, 
+        date_mutation, 
+        id_parcelle,
+        valeur_fonciere,
+        type_local,
+        surface_reelle_bati,
+        code_postal,
+        adresse_nom_voie,
+        nom_commune,
+        adresse_numero
+    FROM 
+        {table_name}
+    WHERE 
+        valeur_fonciere > 0 
+        AND valeur_fonciere <= {max_price}
+        AND surface_reelle_bati > 0
+    """
+    
+    # Apply type filter directly in the query
+    if filters and 'type_local' in filters and filters['type_local']:
+        query += f" AND type_local = '{filters['type_local']}'"
+    
+    # Apply parcelles filter - use SQL IN clause
+    if filters and 'parcelles' in filters and filters['parcelles']:
+        placeholders = [f"'{p.strip()}'" for p in filters['parcelles']]
+        parcelles_list = ", ".join(placeholders)
+        query += f" AND id_parcelle IN ({parcelles_list})"
+    
+    # Apply postal codes filter - use SQL IN clause
+    if filters and 'codes_postaux' in filters and filters['codes_postaux']:
+        placeholders = [f"'{code.strip()}'" for code in filters['codes_postaux']]
+        codes_list = ", ".join(placeholders)
+        query += f" AND code_postal IN ({codes_list})"
+    
+    # Apply min surface filter
+    if filters and 'min_surface' in filters and filters['min_surface'] is not None:
+        min_surface = float(filters['min_surface'])
+        query += f" AND surface_reelle_bati >= {min_surface}"
+    
+    # Apply max surface filter
+    if filters and 'max_surface' in filters and filters['max_surface'] is not None:
+        max_surface = float(filters['max_surface'])
+        query += f" AND surface_reelle_bati <= {max_surface}"
+    
+    return query
+
+def execute_postgres_query(engine, query):
+    """Execute SQL query and return pandas DataFrame"""
+    try:
+        # Create SQLAlchemy text query
+        sql_query = text(query)
+        
+        # Load data into pandas DataFrame
+        df = pd.read_sql(sql_query, engine)
+        print(f"Retrieved {len(df)} rows from database")
+        return df
+        
+    except Exception as e:
+        print(f"Error executing query: {str(e)}")
+        return None
+
+def process_dataframe(df):
+    """Post-process the dataframe to prepare for analysis"""
+    if df is None or len(df) == 0:
+        return None
+        
+    # Convert date_mutation to datetime - only if needed
+    if 'date_mutation' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['date_mutation']):
+        df['date_mutation'] = pd.to_datetime(df['date_mutation'])
+    
+    # Calculate price per square meter
+    df['prix_m2'] = df['valeur_fonciere'] / df['surface_reelle_bati']
+    
+    return df
+
+def load_data_from_postgres(filters=None, max_price=10000000):
+    """Load DVF data from PostgreSQL database with filters"""
+    try:
+        import time
+        start_time = time.time()
+        
+        # Step 1: Connect to database
+        engine = get_database_engine()
+        if not engine:
+            print("Failed to connect to PostgreSQL, will fall back to URL source")
+            return None
+        
+        connect_time = time.time() - start_time
+        print(f"Database connection time: {connect_time:.2f}s")
+        
+        # Step 2: Find DVF data table
+        table_check_start = time.time()
+        table_name = find_dvf_table(engine)
+        if not table_name:
+            return None
+            
+        table_check_time = time.time() - table_check_start
+        print(f"Table check time: {table_check_time:.2f}s")
+        
+        # Step 3: Build query with filters
+        query_build_start = time.time()
+        query = build_postgres_query(table_name, filters, max_price)
+        query_build_time = time.time() - query_build_start
+        print(f"Query build time: {query_build_time:.2f}s")
+        print(f"Executing database query: {query}")
+        
+        # Step 4: Execute query
+        query_exec_start = time.time()
+        df = execute_postgres_query(engine, query)
+        query_exec_time = time.time() - query_exec_start
+        print(f"Query execution time: {query_exec_time:.2f}s")
+        
+        # Step 5: Post-process data
+        if df is not None:
+            process_start = time.time()
+            df = process_dataframe(df)
+            process_time = time.time() - process_start
+            print(f"Post-processing time: {process_time:.2f}s")
+        
+        total_time = time.time() - start_time
+        print(f"Total database load time: {total_time:.2f}s")
+        return df
+    
+    except Exception as e:
+        print(f"Error loading data from database: {str(e)}")
+        print("Will fall back to URL data source")
+        return None
+
+def get_database_connection():
+    """Legacy function for backward compatibility"""
+    return get_database_engine()
 
 @app.route('/api/dvf', methods=['GET'])
 def get_dvf_data():
     try:
         print("API call received to /api/dvf")
-        # Set default URL to the new one provided
-        dvf_url = os.getenv('DVF_API_URL', 'https://files.data.gouv.fr/geo-dvf/latest/csv/2024/full.csv.gz')
-        print(f"Using data source: {dvf_url}")
         
-        # Fetch data from URL
-        print("Loading data from URL...")
-        df = load_data_from_url(dvf_url)
-        print(f"Data loaded successfully, {len(df)} records found")
-        
-        # Apply filters based on query parameters
         # Get filter parameters from the request
         parcelles = request.args.get('parcelles')
         type_local = request.args.get('type')
         min_surface = request.args.get('min')
         max_surface = request.args.get('max')
         option_garage = request.args.get('garage')
-        print(f"Filters: parcelles={parcelles}, type={type_local}, min={min_surface}, max={max_surface}, garage={option_garage}")
+        codes_postaux = request.args.get('codes_postaux')
+        max_price = request.args.get('max_price', default=10000000, type=int)  # Default max price of 10 million euros
         
-        # Apply filters
+        print(f"Filters: parcelles={parcelles}, type={type_local}, min={min_surface}, max={max_surface}, garage={option_garage}, codes_postaux={codes_postaux}, max_price={max_price}")
+        
+        # Default type_local to 'Appartement' if none provided
+        if not type_local:
+            type_local = 'Appartement'
+        
+        # Prepare filters for PostgreSQL query
+        filters = {
+            'type_local': type_local
+        }
+        
         if parcelles:
-            parcelles_list = [p.strip() for p in parcelles.split(',')]
-            df = df[df['id_parcelle'].isin(parcelles_list)]
-            print(f"After parcelles filter: {len(df)} records")
-            
-        if type_local:
-            df = df[df['type_local'] == type_local]
-            print(f"After type filter: {len(df)} records")
-            
+            filters['parcelles'] = parcelles.split(',')
+        
         if min_surface:
             try:
-                min_surface = float(min_surface)
-                df = df[df['surface_reelle_bati'] >= min_surface]
-                print(f"After min surface filter: {len(df)} records")
+                filters['min_surface'] = float(min_surface)
             except ValueError:
                 print(f"Invalid min_surface value: {min_surface}")
-                
+        
         if max_surface:
             try:
-                max_surface = float(max_surface)
-                df = df[df['surface_reelle_bati'] <= max_surface]
-                print(f"After max surface filter: {len(df)} records")
+                filters['max_surface'] = float(max_surface)
             except ValueError:
                 print(f"Invalid max_surface value: {max_surface}")
+        
+        if codes_postaux:
+            filters['codes_postaux'] = codes_postaux.split(',')
+            print(f"Filtering by postal codes: {filters['codes_postaux']}")
+        
+        # Step 1: Try to get data from PostgreSQL
+        print("Attempting to load data from PostgreSQL...")
+        df = load_data_from_postgres(filters, max_price=max_price)
+        
+        # Step 2: If PostgreSQL failed, fall back to URL
+        if df is None or len(df) == 0:
+            print("PostgreSQL data source failed or returned no data, falling back to URL source")
+            # Set default URL to the new one provided
+            dvf_url = os.getenv('DVF_API_URL', 'https://files.data.gouv.fr/geo-dvf/latest/csv/2024/full.csv.gz')
+            print(f"Using URL data source: {dvf_url}")
+            
+            # Fetch data from URL with max price filter
+            df = load_data_from_url(dvf_url, max_price=max_price)
+            print(f"Data loaded from URL: {len(df)} records")
+            
+            # Apply filters based on query parameters
+            if type_local:
+                df = df[df['type_local'] == type_local]
+                print(f"After type filter: {len(df)} records")
+            
+            if parcelles:
+                parcelles_list = [p.strip() for p in parcelles.split(',')]
+                df = df[df['id_parcelle'].isin(parcelles_list)]
+                print(f"After parcelles filter: {len(df)} records")
+            
+            # Apply postal code filter when using CSV
+            if codes_postaux:
+                codes_list = [code.strip() for code in codes_postaux.split(',')]
+                # Check if code_postal column exists in the dataframe
+                if 'code_postal' in df.columns:
+                    df = df[df['code_postal'].isin(codes_list)]
+                    print(f"After code postal filter: {len(df)} records")
+                else:
+                    print("Warning: code_postal column not found in CSV data, postal code filter skipped")
                 
+            if min_surface:
+                try:
+                    min_surface = float(min_surface)
+                    df = df[df['surface_reelle_bati'] >= min_surface]
+                    print(f"After min surface filter: {len(df)} records")
+                except ValueError:
+                    print(f"Invalid min_surface value: {min_surface}")
+                    
+            if max_surface:
+                try:
+                    max_surface = float(max_surface)
+                    df = df[df['surface_reelle_bati'] <= max_surface]
+                    print(f"After max surface filter: {len(df)} records")
+                except ValueError:
+                    print(f"Invalid max_surface value: {max_surface}")
+        
+        # Option garage filter (applies to both data sources)
         if option_garage == 'avec':
             # This would need mutation IDs with garage dependencies
             # Simplified version - assuming we don't have this data structure in the sample
@@ -321,31 +635,91 @@ def get_dvf_data():
         print(f"Total filtered transactions: {nombre_transactions}")
         
         # Calculate statistics
-        nombre_transactions_affiches = min(len(df), 100000000000000)  # Limit displayed transactions to 100
+        nombre_transactions_affiches = min(len(df), 100)  # Limit displayed transactions to 100
         
-        # Calculate statistics on the entire dataset
-        prix_moyen = int(df['valeur_fonciere'].mean()) if not df.empty else 0
-        prix_median = int(df['valeur_fonciere'].median()) if not df.empty else 0
-        prix_m2_moyen = int(df['prix_m2'].mean()) if not df.empty else 0
-        prix_m2_median = int(df['prix_m2'].median()) if not df.empty else 0
+        # Detect and handle outliers for more accurate statistics
+        if not df.empty:
+            # Log basic statistics before outlier removal
+            print(f"Before outlier removal - Min price: {df['valeur_fonciere'].min()}, Max price: {df['valeur_fonciere'].max()}")
+            print(f"Before outlier removal - 10th percentile: {df['valeur_fonciere'].quantile(0.1)}, 90th percentile: {df['valeur_fonciere'].quantile(0.9)}")
+            
+            # Calculate quartiles for outlier detection
+            Q1 = df['valeur_fonciere'].quantile(0.25)
+            Q3 = df['valeur_fonciere'].quantile(0.75)
+            IQR = Q3 - Q1
+            
+            # Define outlier bounds (standard is 1.5*IQR)
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            
+            print(f"Outlier detection - Q1: {Q1}, Q3: {Q3}, IQR: {IQR}")
+            print(f"Outlier detection - Lower bound: {lower_bound}, Upper bound: {upper_bound}")
+            
+            # Filter outliers for statistics calculation
+            df_filtered = df[(df['valeur_fonciere'] >= lower_bound) & (df['valeur_fonciere'] <= upper_bound)]
+            outliers_count = len(df) - len(df_filtered)
+            
+            if outliers_count > 0:
+                print(f"Filtered {outliers_count} outlier prices for statistics calculation")
+                # Log the outliers for analysis
+                outliers = df[~df.index.isin(df_filtered.index)]
+                print(f"Sample of outlier values: {outliers['valeur_fonciere'].sample(min(5, len(outliers))).tolist()}")
+                
+            # After filtering, log statistics again
+            if not df_filtered.empty:
+                print(f"After outlier removal - Min price: {df_filtered['valeur_fonciere'].min()}, Max price: {df_filtered['valeur_fonciere'].max()}")
+                
+            # Use filtered data for statistics but keep all data for display
+            prix_moyen = int(df_filtered['valeur_fonciere'].mean()) if not df_filtered.empty else 0
+            prix_median = int(df_filtered['valeur_fonciere'].median()) if not df_filtered.empty else 0
+            prix_m2_moyen = int(df_filtered['prix_m2'].mean()) if not df_filtered.empty else 0
+            prix_m2_median = int(df_filtered['prix_m2'].median()) if not df_filtered.empty else 0
+        else:
+            prix_moyen = 0
+            prix_median = 0
+            prix_m2_moyen = 0
+            prix_m2_median = 0
         
         print(f"Statistics calculated: prix_moyen={prix_moyen}, prix_median={prix_median}")
         
         # Sample data for display if needed
         display_df = df
-        if len(df) > 100:
-            display_df = df.sample(n=100, random_state=42)
-            print(f"Sampled {len(display_df)} transactions for display")
+     
             
         # Format transactions data
         transactions = []
         for _, row in display_df.iterrows():
+            # Handle NaN values safely by providing defaults
+            prix = 0 if pd.isna(row['valeur_fonciere']) else int(row['valeur_fonciere'])
+            surface = 0 if pd.isna(row['surface_reelle_bati']) else int(row['surface_reelle_bati'])
+            prix_m2 = 0 if pd.isna(row['prix_m2']) else int(row['prix_m2'])
+            
+            # Create transaction object with all available fields
             transaction = {
                 'date': row['date_mutation'].strftime('%d/%m/%Y'),
-                'prix': int(row['valeur_fonciere']),
-                'surface': int(row['surface_reelle_bati']),
-                'prix_m2': int(row['prix_m2'])
+                'prix': prix,
+                'surface': surface,
+                'prix_m2': prix_m2
             }
+            
+            # Add optional fields if they exist in the dataframe
+            if 'code_postal' in row and not pd.isna(row['code_postal']):
+                transaction['code_postal'] = row['code_postal']
+                
+            # Add address and commune if they exist in the dataframe
+            if 'adresse_nom_voie' in row and not pd.isna(row['adresse_nom_voie']):
+                transaction['adresse'] = row['adresse_nom_voie']
+                
+            # Add street number if it exists
+            if 'adresse_numero' in row and not pd.isna(row['adresse_numero']) and str(row['adresse_numero']).strip():
+                transaction['numero'] = str(row['adresse_numero']).strip()
+                # If both number and street name exist, create a full address field
+                if 'adresse' in transaction:
+                    transaction['adresse_complete'] = f"{transaction['numero']} {transaction['adresse']}"
+                
+            if 'nom_commune' in row and not pd.isna(row['nom_commune']):
+                transaction['commune'] = row['nom_commune']
+                
             transactions.append(transaction)
         
         # Create response
@@ -358,6 +732,29 @@ def get_dvf_data():
             'prix_m2_median': prix_m2_median,
             'transactions': transactions
         }
+        
+        # Add address info statistics if available
+        if 'adresse_nom_voie' in df.columns:
+            address_count = int(df['adresse_nom_voie'].notna().sum())
+            response['adresses_disponibles'] = address_count
+            response['adresses_pourcentage'] = float(round(address_count / nombre_transactions * 100, 1)) if nombre_transactions > 0 else 0
+            
+        if 'nom_commune' in df.columns:
+            commune_count = int(df['nom_commune'].notna().sum())
+            response['communes_disponibles'] = commune_count
+            response['communes_pourcentage'] = float(round(commune_count / nombre_transactions * 100, 1)) if nombre_transactions > 0 else 0
+            
+        if 'adresse_numero' in df.columns:
+            # Count non-empty street numbers
+            numero_count = int(df['adresse_numero'].notna().sum())
+            valid_numero_count = int(df['adresse_numero'].apply(lambda x: str(x).strip() != "" if not pd.isna(x) else False).sum())
+            response['numeros_disponibles'] = valid_numero_count
+            response['numeros_pourcentage'] = float(round(valid_numero_count / nombre_transactions * 100, 1)) if nombre_transactions > 0 else 0
+        
+        # Ensure all values are JSON serializable (convert numpy types to Python types)
+        response = {k: int(v) if isinstance(v, np.integer) else float(v) if isinstance(v, np.floating) else v 
+                   for k, v in response.items() if k != 'transactions'}
+        response['transactions'] = transactions
         
         print("Sending response to client")
         return jsonify(response)
