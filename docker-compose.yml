@@ -27,6 +27,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
     environment:
       POSTGRES_USER: dvf_user
       POSTGRES_PASSWORD: dvf_password
