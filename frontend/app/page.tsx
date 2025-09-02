@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import {
   Building2,
+  Calendar,
   Filter,
   Home,
   LocationEdit,
@@ -11,11 +10,23 @@ import {
   Maximize2,
   Minimize2,
   ParkingCircle,
-  Pin,
   Plus,
+  TrendingUp,
   X,
 } from "lucide-react";
+import { useState } from "react";
+import {
+  Bar,
+  BarChart,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -27,6 +38,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -37,7 +53,6 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
