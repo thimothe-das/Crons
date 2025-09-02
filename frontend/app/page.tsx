@@ -64,6 +64,12 @@ export default function DashboardPage() {
     maxArea: "",
     garage: false,
     codesPostaux: [] as string[],
+
+    // Default to last two years
+    years: [
+      (new Date().getFullYear() - 1).toString(),
+      (new Date().getFullYear() - 2).toString(),
+    ],
   });
   const [results, setResults] = useState<null | {
     nombre_transactions: number;
@@ -87,6 +93,10 @@ export default function DashboardPage() {
 
   // API URL
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:6644";
+  const currentYear = new Date().getFullYear();
+  const availableYears = Array.from({ length: 7 }, (_, i) =>
+    (currentYear - 1 - i).toString()
+  );
 
   const handleFilterChange = (
     key: string,
@@ -131,6 +141,26 @@ export default function DashboardPage() {
     }));
   };
 
+  const handleYearSelect = (year: string) => {
+    if (filters.years.includes(year)) {
+      // Remove if already selected
+      handleRemoveYear(year);
+    } else {
+      // Add if not selected
+      setFilters((prev) => ({
+        ...prev,
+        years: [...prev.years, year].sort((a, b) => Number(b) - Number(a)), // Sort descending
+      }));
+    }
+  };
+
+  const handleRemoveYear = (yearToRemove: string) => {
+    setFilters((prev) => ({
+      ...prev,
+      years: prev.years.filter((year) => year !== yearToRemove),
+    }));
+  };
+
   const handleAnalyze = async () => {
     setLoading(true);
     try {
@@ -161,6 +191,10 @@ export default function DashboardPage() {
         params.append("codes_postaux", filters.codesPostaux.join(","));
       }
 
+      if (filters.years.length > 0) {
+        params.append("years", filters.years.join(","));
+      }
+
       // Fetch data from the real API
       const url = `${API_URL}/api/dvf${
         params.toString() ? "?" + params.toString() : ""
@@ -187,17 +221,64 @@ export default function DashboardPage() {
     }
   };
 
-  const priceChartData =
-    results?.transactions.map((t) => ({
-      date: t.date.split("/")[1] + "/" + t.date.split("/")[2].slice(2),
-      prix: t.prix,
-    })) || [];
+  // Aggregate data by day and calculate average price
+  const aggregatePricesByDay = (
+    transactions: Array<{
+      date: string;
+      prix: number;
+      prix_m2: number;
+    }>
+  ) => {
+    const aggregated = transactions.reduce(
+      (
+        acc: {
+          [key: string]: {
+            totalPrice: number;
+            totalPriceM2: number;
+            count: number;
+          };
+        },
+        t
+      ) => {
+        const dayKey = t.date;
+        if (!acc[dayKey]) {
+          acc[dayKey] = { totalPrice: 0, totalPriceM2: 0, count: 0 };
+        }
+        acc[dayKey].totalPrice += t.prix;
+        acc[dayKey].totalPriceM2 += t.prix_m2;
+        acc[dayKey].count += 1;
+        return acc;
+      },
+      {}
+    );
 
-  const pricePerM2ChartData =
-    results?.transactions.map((t) => ({
-      date: t.date.split("/")[1] + "/" + t.date.split("/")[2].slice(2),
-      prix_m2: t.prix_m2,
-    })) || [];
+    return Object.entries(aggregated).map(([date, data]) => ({
+      date: date,
+      prix: Math.round(data.totalPrice / data.count),
+      prix_m2: Math.round(data.totalPriceM2 / data.count),
+    }));
+  };
+
+  const priceChartData = results
+    ? aggregatePricesByDay(results.transactions)
+    : [];
+
+  // Create sorted versions of chart data for trend view
+  const sortByDate = (data: typeof priceChartData) => {
+    return [...data].sort((a, b) => {
+      const [monthA, yearA] = a.date.split("/");
+      const [monthB, yearB] = b.date.split("/");
+      const dateA = new Date(2000 + parseInt(yearA), parseInt(monthA) - 1);
+      const dateB = new Date(2000 + parseInt(yearB), parseInt(monthB) - 1);
+      return dateA.getTime() - dateB.getTime();
+    });
+  };
+
+  // Use sorted data for all charts
+  const sortedPriceChartData = sortByDate(priceChartData);
+
+  // No need for a separate variable since they use the same data structure
+  const pricePerM2ChartData = sortedPriceChartData;
 
   const surfaceDistribution =
     results?.transactions.reduce((acc, t) => {
@@ -216,8 +297,8 @@ export default function DashboardPage() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-10 flex h-16 items-center gap-4 border-b bg-background px-4 md:px-6">
-        <div className="flex items-center gap-2 font-semibold">
+      <header className="sticky top-0 z-10 flex h-16 items-center gap-4 border-b bg-background/95 backdrop-blur-sm px-4 md:px-6 shadow-sm">
+        <div className="flex items-center gap-2 font-semibold text-primary">
           <Building2 className="h-6 w-6" />
           <span>Analyse DVF - Prix Immobiliers</span>
         </div>
@@ -226,17 +307,18 @@ export default function DashboardPage() {
             variant="outline"
             size="sm"
             onClick={() => window.location.reload()}
+            className="hover:bg-secondary/20 transition-colors"
           >
             Réinitialiser
           </Button>
         </div>
       </header>
       <div className="flex-1 grid grid-cols-1 md:grid-cols-[280px_1fr] lg:grid-cols-[280px_1fr]">
-        <div className="border-r p-4 md:p-6">
+        <div className="border-r p-4 md:p-6 bg-secondary/5">
           <div className="space-y-4">
             <div>
-              <h3 className="mb-2 text-lg font-medium">Filtres</h3>
-              <Separator />
+              <h3 className="mb-2 text-lg font-medium text-primary">Filtres</h3>
+              <Separator className="bg-border/60" />
             </div>
             <div className="space-y-4">
               <div className="space-y-2">
@@ -305,6 +387,74 @@ export default function DashboardPage() {
                   </div>
                 )}
               </div>
+
+              <div className="space-y-2">
+                <Label>Années</Label>
+                <div className="flex flex-col space-y-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-between"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">
+                            {filters.years.length === 0
+                              ? "Sélectionner des années"
+                              : filters.years.length === 1
+                              ? `${filters.years[0]}`
+                              : `${filters.years.length} années sélectionnées`}
+                          </span>
+                        </div>
+                        <Plus className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-full p-0" align="start">
+                      <div className="grid grid-cols-2 gap-1 p-2">
+                        {availableYears.map((year) => (
+                          <Button
+                            key={year}
+                            variant={
+                              filters.years.includes(year)
+                                ? "default"
+                                : "outline"
+                            }
+                            size="sm"
+                            className="justify-start"
+                            onClick={() => handleYearSelect(year)}
+                          >
+                            {year}
+                          </Button>
+                        ))}
+                      </div>
+                      <Separator />
+                    </PopoverContent>
+                  </Popover>
+
+                  {filters.years.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {filters.years.map((year) => (
+                        <Badge
+                          key={year}
+                          variant="secondary"
+                          className="flex items-center gap-1"
+                        >
+                          {year}
+                          <button
+                            type="button"
+                            className="ml-1 rounded-full hover:bg-muted"
+                            onClick={() => handleRemoveYear(year)}
+                          >
+                            <X className="h-3 w-3" />
+                            <span className="sr-only">Supprimer</span>
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="type">Type de bien</Label>
                 <Select
@@ -368,11 +518,21 @@ export default function DashboardPage() {
               </div>
 
               <Button
-                className="w-full"
+                className="w-full bg-primary hover:bg-primary/90 transition-colors"
                 onClick={handleAnalyze}
                 disabled={loading}
               >
-                {loading ? "Analyse en cours..." : "Analyser"}
+                {loading ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
+                    <span>Analyse en cours...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4" />
+                    <span>Analyser</span>
+                  </div>
+                )}
               </Button>
             </div>
           </div>
@@ -396,14 +556,14 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-6">
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <Card className="overflow-hidden border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 bg-secondary/30">
                     <CardTitle className="text-sm font-medium">
                       Transactions
                     </CardTitle>
-                    <Filter className="h-4 w-4 text-muted-foreground" />
+                    <Filter className="h-4 w-4 text-primary" />
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="pt-4">
                     <div className="text-2xl font-bold">
                       {results.nombre_transactions}
                     </div>
@@ -419,8 +579,8 @@ export default function DashboardPage() {
                     </p>
                   </CardContent>
                 </Card>
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <Card className="overflow-hidden border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 bg-secondary/30">
                     <CardTitle className="text-sm font-medium">
                       Prix moyen
                     </CardTitle>
@@ -432,12 +592,12 @@ export default function DashboardPage() {
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth="2"
-                      className="h-4 w-4 text-muted-foreground"
+                      className="h-4 w-4 text-primary"
                     >
                       <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
                     </svg>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="pt-4">
                     <div className="text-2xl font-bold">
                       {results.prix_moyen.toLocaleString("fr-FR")} €
                     </div>
@@ -446,8 +606,8 @@ export default function DashboardPage() {
                     </p>
                   </CardContent>
                 </Card>
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <Card className="overflow-hidden border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 bg-secondary/30">
                     <CardTitle className="text-sm font-medium">
                       Prix médian
                     </CardTitle>
@@ -459,12 +619,12 @@ export default function DashboardPage() {
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth="2"
-                      className="h-4 w-4 text-muted-foreground"
+                      className="h-4 w-4 text-primary"
                     >
                       <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
                     </svg>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="pt-4">
                     <div className="text-2xl font-bold">
                       {results.prix_median.toLocaleString("fr-FR")} €
                     </div>
@@ -473,14 +633,14 @@ export default function DashboardPage() {
                     </p>
                   </CardContent>
                 </Card>
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <Card className="overflow-hidden border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 bg-secondary/30">
                     <CardTitle className="text-sm font-medium">
                       Surface moyenne
                     </CardTitle>
-                    <Maximize2 className="h-4 w-4 text-muted-foreground" />
+                    <Maximize2 className="h-4 w-4 text-primary" />
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="pt-4">
                     <div className="text-2xl font-bold">
                       {Math.round(
                         results.transactions.reduce(
@@ -498,23 +658,56 @@ export default function DashboardPage() {
               </div>
 
               <Tabs defaultValue="price" className="space-y-4">
-                <TabsList>
-                  <TabsTrigger value="price">Prix</TabsTrigger>
-                  <TabsTrigger value="price-m2">Prix au m²</TabsTrigger>
-                  <TabsTrigger value="surface">Surfaces</TabsTrigger>
+                <TabsList className="bg-secondary/40 p-1">
+                  <TabsTrigger
+                    value="price"
+                    className="data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                  >
+                    Prix
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="price-m2"
+                    className="data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                  >
+                    Prix au m²
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="surface"
+                    className="data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                  >
+                    Surfaces
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="trend"
+                    className="data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                  >
+                    Evolution des prix
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="trend-m2"
+                    className="data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                  >
+                    Evolution des prix au m²
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="table"
+                    className="data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                  >
+                    Tableau
+                  </TabsTrigger>
                 </TabsList>
                 <TabsContent value="price" className="space-y-4">
-                  <Card>
-                    <CardHeader>
+                  <Card className="border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <CardHeader className="border-b bg-secondary/10">
                       <CardTitle>Évolution des prix</CardTitle>
                       <CardDescription>
                         Distribution des prix des {results.nombre_transactions}{" "}
                         transactions
                       </CardDescription>
                     </CardHeader>
-                    <CardContent className="pl-2">
+                    <CardContent className="p-6">
                       <ResponsiveContainer width="100%" height={350}>
-                        <BarChart data={priceChartData}>
+                        <BarChart data={sortedPriceChartData}>
                           <XAxis
                             dataKey="date"
                             stroke="#888888"
@@ -529,9 +722,16 @@ export default function DashboardPage() {
                             axisLine={false}
                             tickFormatter={(value) => `${value / 1000}k€`}
                           />
+                          <Tooltip
+                            formatter={(value: number) => [
+                              `${value.toLocaleString("fr-FR")} €`,
+                              "Prix",
+                            ]}
+                            labelFormatter={(label) => `Date: ${label}`}
+                          />
                           <Bar
                             dataKey="prix"
-                            fill="hsl(var(--primary))"
+                            fill="var(--primary)"
                             radius={[4, 4, 0, 0]}
                           />
                         </BarChart>
@@ -540,15 +740,15 @@ export default function DashboardPage() {
                   </Card>
                 </TabsContent>
                 <TabsContent value="price-m2" className="space-y-4">
-                  <Card>
-                    <CardHeader>
+                  <Card className="border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <CardHeader className="border-b bg-secondary/10">
                       <CardTitle>Prix au m²</CardTitle>
                       <CardDescription>
                         Distribution des prix au m² des{" "}
                         {results.nombre_transactions} transactions
                       </CardDescription>
                     </CardHeader>
-                    <CardContent className="pl-2">
+                    <CardContent className="p-6">
                       <ResponsiveContainer width="100%" height={350}>
                         <BarChart data={pricePerM2ChartData}>
                           <XAxis
@@ -565,9 +765,16 @@ export default function DashboardPage() {
                             axisLine={false}
                             tickFormatter={(value) => `${value}€/m²`}
                           />
+                          <Tooltip
+                            formatter={(value: number) => [
+                              `${value.toLocaleString("fr-FR")} €/m²`,
+                              "Prix/m²",
+                            ]}
+                            labelFormatter={(label) => `Date: ${label}`}
+                          />
                           <Bar
                             dataKey="prix_m2"
-                            fill="hsl(var(--primary))"
+                            fill="var(--accent)"
                             radius={[4, 4, 0, 0]}
                           />
                         </BarChart>
@@ -576,14 +783,14 @@ export default function DashboardPage() {
                   </Card>
                 </TabsContent>
                 <TabsContent value="surface" className="space-y-4">
-                  <Card>
-                    <CardHeader>
+                  <Card className="border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <CardHeader className="border-b bg-secondary/10">
                       <CardTitle>Distribution des surfaces</CardTitle>
                       <CardDescription>
                         Répartition des biens par tranche de surface
                       </CardDescription>
                     </CardHeader>
-                    <CardContent className="pl-2">
+                    <CardContent className="p-6">
                       <ResponsiveContainer width="100%" height={350}>
                         <BarChart data={surfaceChartData}>
                           <XAxis
@@ -600,9 +807,16 @@ export default function DashboardPage() {
                             axisLine={false}
                             tickFormatter={(value) => `${value}`}
                           />
+                          <Tooltip
+                            formatter={(value: number) => [
+                              `${value} biens`,
+                              "Nombre",
+                            ]}
+                            labelFormatter={(label) => `Surface: ${label}`}
+                          />
                           <Bar
                             dataKey="count"
-                            fill="hsl(var(--primary))"
+                            fill="var(--chart-3)"
                             radius={[4, 4, 0, 0]}
                           />
                         </BarChart>
@@ -610,47 +824,147 @@ export default function DashboardPage() {
                     </CardContent>
                   </Card>
                 </TabsContent>
-              </Tabs>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Détail des transactions</CardTitle>
-                  <CardDescription>
-                    Liste des {results.nombre_transactions} transactions
-                    correspondant aux critères
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="rounded-md border">
-                    <div className="grid grid-cols-7 border-b px-4 py-2 font-medium">
-                      <div>Date</div>
-                      <div>Prix</div>
-                      <div>Surface</div>
-                      <div>Prix/m²</div>
-                      <div>Adresse</div>
-                      <div>Commune</div>
-                      <div>Code Postal</div>
-                    </div>
-                    <div className="divide-y">
-                      {results.transactions.map((transaction, i) => (
-                        <div key={i} className="grid grid-cols-7 px-4 py-3">
-                          <div>{transaction.date}</div>
-                          <div>
-                            {transaction.prix.toLocaleString("fr-FR")} €
-                          </div>
-                          <div>{transaction.surface} m²</div>
-                          <div>
-                            {transaction.prix_m2.toLocaleString("fr-FR")} €/m²
-                          </div>
-                          <div>{transaction.adresse_complete}</div>
-                          <div>{transaction.commune}</div>
-                          <div>{transaction.code_postal}</div>
+                <TabsContent value="trend" className="space-y-4">
+                  <Card className="border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <CardHeader className="border-b bg-secondary/10">
+                      <CardTitle>Évolution des prix dans le temps</CardTitle>
+                      <CardDescription>
+                        Tendance des prix sur la période sélectionnée
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <ResponsiveContainer width="100%" height={350}>
+                        <LineChart data={sortedPriceChartData}>
+                          <XAxis
+                            dataKey="date"
+                            stroke="#888888"
+                            fontSize={12}
+                            tickLine={false}
+                            axisLine={false}
+                          />
+                          <YAxis
+                            stroke="#888888"
+                            fontSize={12}
+                            tickLine={false}
+                            axisLine={false}
+                            tickFormatter={(value) => `${value / 1000}k€`}
+                          />
+                          <Tooltip
+                            formatter={(value: number) => [
+                              `${value.toLocaleString("fr-FR")} €`,
+                              "Prix",
+                            ]}
+                            labelFormatter={(label) => `Date: ${label}`}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="prix"
+                            stroke="var(--primary)"
+                            strokeWidth={3}
+                            dot={{ r: 2, strokeWidth: 2, fill: "white" }}
+                            activeDot={{ r: 6, strokeWidth: 0 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                <TabsContent value="trend-m2" className="space-y-4">
+                  <Card className="border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <CardHeader className="border-b bg-secondary/10">
+                      <CardTitle>Évolution des prix au m²</CardTitle>
+                      <CardDescription>
+                        Tendance des prix au m² sur la période sélectionnée
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <ResponsiveContainer width="100%" height={350}>
+                        <LineChart data={pricePerM2ChartData}>
+                          <XAxis
+                            dataKey="date"
+                            stroke="#888888"
+                            fontSize={12}
+                            tickLine={false}
+                            axisLine={false}
+                          />
+                          <YAxis
+                            stroke="#888888"
+                            fontSize={12}
+                            tickLine={false}
+                            axisLine={false}
+                            tickFormatter={(value) => `${value}€/m²`}
+                          />
+                          <Tooltip
+                            formatter={(value: number) => [
+                              `${value.toLocaleString("fr-FR")} €/m²`,
+                              "Prix/m²",
+                            ]}
+                            labelFormatter={(label) => `Date: ${label}`}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="prix_m2"
+                            stroke="var(--accent)"
+                            strokeWidth={3}
+                            dot={{ r: 2, strokeWidth: 2, fill: "white" }}
+                            activeDot={{ r: 6, strokeWidth: 0 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                <TabsContent value="table" className="space-y-4">
+                  <Card className="border-none shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <CardHeader className="border-b bg-secondary/10">
+                      <CardTitle>Détail des transactions</CardTitle>
+                      <CardDescription>
+                        Liste des {results.nombre_transactions} transactions
+                        correspondant aux critères
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <div className="rounded-md border shadow-sm overflow-hidden">
+                        <div className="grid grid-cols-7 bg-secondary/20 px-4 py-3 font-medium text-sm sticky top-0">
+                          <div>Date</div>
+                          <div>Prix</div>
+                          <div>Surface</div>
+                          <div>Prix/m²</div>
+                          <div>Adresse</div>
+                          <div>Commune</div>
+                          <div>Code Postal</div>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                        <div className="divide-y max-h-[400px] overflow-y-auto">
+                          {results.transactions.map((transaction, i) => (
+                            <div
+                              key={i}
+                              className="grid grid-cols-7 px-4 py-3 text-sm hover:bg-secondary/10 transition-colors"
+                            >
+                              <div>{transaction.date}</div>
+                              <div className="font-medium text-primary">
+                                {transaction.prix.toLocaleString("fr-FR")} €
+                              </div>
+                              <div>{transaction.surface} m²</div>
+                              <div className="font-medium text-accent">
+                                {transaction.prix_m2.toLocaleString("fr-FR")}{" "}
+                                €/m²
+                              </div>
+                              <div
+                                className="truncate"
+                                title={transaction.adresse_complete}
+                              >
+                                {transaction.adresse_complete}
+                              </div>
+                              <div>{transaction.commune}</div>
+                              <div>{transaction.code_postal}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+              </Tabs>
             </div>
           )}
         </div>

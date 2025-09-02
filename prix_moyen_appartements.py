@@ -424,6 +424,22 @@ def build_postgres_query(table_name, filters=None, max_price=10000000):
     if filters and 'type_local' in filters and filters['type_local']:
         query += f" AND type_local = '{filters['type_local']}'"
     
+    # Apply year filter if provided
+    if filters and 'years' in filters and filters['years']:
+        years_list = []
+        for y in filters['years']:
+            try:
+                year_clean = int(y.strip())
+                years_list.append(str(year_clean))
+            except (ValueError, TypeError):
+                print(f"Invalid year value: {y}, skipping")
+                
+        if years_list:
+            years_str = ", ".join(years_list)
+            # Cast date_mutation to date type first, in case it's stored as text
+            query += f" AND EXTRACT(YEAR FROM date_mutation::date) IN ({years_str})"
+            print(f"Filtering by years: {years_str}")
+    
     # Apply the most specific filters first (for query planner optimization)
     # Apply parcelles filter - use SQL IN clause with limited set of values
     if filters and 'parcelles' in filters and filters['parcelles']:
@@ -623,8 +639,9 @@ def get_dvf_data():
         option_garage = request.args.get('garage')
         codes_postaux = request.args.get('codes_postaux')
         max_price = request.args.get('max_price', default=10000000, type=int)  # Default max price of 10 million euros
+        years = request.args.get('years')  # Multiple years, comma-separated
         
-        print(f"Filters: parcelles={parcelles}, type={type_local}, min={min_surface}, max={max_surface}, garage={option_garage}, codes_postaux={codes_postaux}, max_price={max_price}")
+        print(f"Filters: parcelles={parcelles}, type={type_local}, min={min_surface}, max={max_surface}, garage={option_garage}, codes_postaux={codes_postaux}, max_price={max_price}, years={years}")
         
         # Default type_local to 'Appartement' if none provided
         if not type_local:
@@ -653,6 +670,10 @@ def get_dvf_data():
         if codes_postaux:
             filters['codes_postaux'] = codes_postaux.split(',')
             print(f"Filtering by postal codes: {filters['codes_postaux']}")
+            
+        if years:
+            filters['years'] = years.split(',')
+            print(f"Filtering by years: {filters['years']}")
         
         # Step 1: Try to get data from PostgreSQL
         print("Attempting to load data from PostgreSQL...")
@@ -688,6 +709,22 @@ def get_dvf_data():
                     print(f"After code postal filter: {len(df)} records")
                 else:
                     print("Warning: code_postal column not found in CSV data, postal code filter skipped")
+            
+            # Apply years filter when using CSV
+            if years:
+                try:
+                    years_list = [int(y.strip()) for y in years.split(',') if y.strip().isdigit()]
+                    if years_list and 'date_mutation' in df.columns:
+                        # Make sure date_mutation is datetime type
+                        if not pd.api.types.is_datetime64_any_dtype(df['date_mutation']):
+                            df['date_mutation'] = pd.to_datetime(df['date_mutation'], errors='coerce')
+                        # Filter by years using isin
+                        df = df[df['date_mutation'].dt.year.isin(years_list)]
+                        print(f"After years filter: {len(df)} records")
+                    else:
+                        print("Warning: date_mutation column not found in CSV data or no valid years provided, years filter skipped")
+                except Exception as e:
+                    print(f"Error applying years filter: {str(e)}")
                 
             if min_surface:
                 try:
@@ -814,23 +851,14 @@ def get_dvf_data():
             'transactions': transactions
         }
         
-        # Add address info statistics if available
-        if 'adresse_nom_voie' in df.columns:
-            address_count = int(df['adresse_nom_voie'].notna().sum())
-            response['adresses_disponibles'] = address_count
-            response['adresses_pourcentage'] = float(round(address_count / nombre_transactions * 100, 1)) if nombre_transactions > 0 else 0
-            
-        if 'nom_commune' in df.columns:
-            commune_count = int(df['nom_commune'].notna().sum())
-            response['communes_disponibles'] = commune_count
-            response['communes_pourcentage'] = float(round(commune_count / nombre_transactions * 100, 1)) if nombre_transactions > 0 else 0
-            
-        if 'adresse_numero' in df.columns:
-            # Count non-empty street numbers
-            numero_count = int(df['adresse_numero'].notna().sum())
-            valid_numero_count = int(df['adresse_numero'].apply(lambda x: str(x).strip() != "" if not pd.isna(x) else False).sum())
-            response['numeros_disponibles'] = valid_numero_count
-            response['numeros_pourcentage'] = float(round(valid_numero_count / nombre_transactions * 100, 1)) if nombre_transactions > 0 else 0
+        # Add filter information to response
+        if years:
+            try:
+                years_list = [int(y.strip()) for y in years.split(',') if y.strip().isdigit()]
+                if years_list:
+                    response['years'] = years_list
+            except Exception as e:
+                print(f"Error adding years to response: {str(e)}")
         
         # Ensure all values are JSON serializable (convert numpy types to Python types)
         response = {k: int(v) if isinstance(v, np.integer) else float(v) if isinstance(v, np.floating) else v 
