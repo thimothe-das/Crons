@@ -934,12 +934,10 @@ def afficher_resultats(resultats, parcelles, type_local, min_m2, max_m2, option_
         print("Aucune transaction trouvée correspondant aux critères")
 
 if __name__ == "__main__":
-    # Check if we should run the API or the CLI
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == '--api':
-        # Run as API server
-        port = int(os.getenv('PORT', 6644))
-        app.run(debug=True, host='0.0.0.0', port=port)
-    else:
-        # Run as CLI tool
-        main() 
+    import os
+    # Always start as API when container runs
+    port = int(os.getenv("PORT", 6644))
+    debug = os.getenv("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
+
+    print(f"Starting Flask API on port {port} (debug={debug})")
+    app.run(host="0.0.0.0", port=port, debug=debug)
