@@ -19,6 +19,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Resource limits for database
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
 
   data-importer:
     build:
@@ -27,13 +34,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
+    restart: "no" # Don't restart - should run once and exit
     environment:
       POSTGRES_USER: dvf_user
       POSTGRES_PASSWORD: dvf_password
       POSTGRES_DB: dvf_data
       POSTGRES_HOST: postgres
       YEARS_TO_IMPORT: "2020,2021,2022,2023,2024"
+      # Memory management settings
+      CSV_CHUNK_SIZE: "3000" # Smaller chunks for memory efficiency
+      DOWNLOAD_CHUNK_SIZE: "8192"
+    # Resource limits to prevent OOM kills
+    deploy:
+      resources:
+        limits:
+          memory: 768M # Conservative memory limit
+        reservations:
+          memory: 256M
+    # Add health check
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f python || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres_data:
