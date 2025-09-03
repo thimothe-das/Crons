@@ -18,8 +18,9 @@ COPY dvf_importer.py .
 COPY db_schema.sql .
 COPY entrypoint.sh .
 
-# Make entrypoint script executable
-RUN chmod +x /app/entrypoint.sh
+# Make entrypoint script executable and create logs directory
+RUN chmod +x /app/entrypoint.sh \
+    && mkdir -p /app/logs
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app \

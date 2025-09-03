@@ -27,14 +27,21 @@ DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
 DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
 
 # Configure logging
-os.makedirs('logs', exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
+try:
+    os.makedirs('logs', exist_ok=True)
+    log_handlers = [
         logging.FileHandler('logs/dvf_import.log'),
         logging.StreamHandler()
     ]
+except PermissionError:
+    # Fall back to console-only logging if file logging fails
+    print("Warning: Cannot create log file, using console logging only")
+    log_handlers = [logging.StreamHandler()]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=log_handlers
 )
 logger = logging.getLogger(__name__)
 
