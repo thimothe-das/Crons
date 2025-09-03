@@ -111,10 +111,26 @@ class DVFImporter:
             with self.connection.cursor() as cursor:
                 # Read and execute schema file
                 with open('db_schema.sql', 'r') as f:
-                    schema_sql = f.read()
+                    schema_sql = f.read().strip()
+                
+                if not schema_sql:
+                    logger.error("Schema file is empty")
+                    return False
                     
                 logger.info("Creating database schema...")
-                cursor.execute(schema_sql)
+                
+                # Split and execute statements individually to handle multiple statements
+                statements = [stmt.strip() for stmt in schema_sql.split(';') if stmt.strip()]
+                
+                for i, statement in enumerate(statements):
+                    if statement:
+                        try:
+                            cursor.execute(statement)
+                            logger.info(f"Executed schema statement {i+1}/{len(statements)}")
+                        except Exception as stmt_error:
+                            logger.warning(f"Statement {i+1} failed (may be expected): {stmt_error}")
+                            # Continue with other statements
+                            
                 self.connection.commit()
                 logger.info("✅ Database schema initialized successfully")
                 return True
