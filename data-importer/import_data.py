@@ -162,20 +162,38 @@ def process_csv_chunk(chunk_data, columns):
             'valeur_fonciere', 
             'surface_reelle_bati', 
             'nombre_pieces_principales',
-            'surface_terrain'
+            'surface_terrain',
+            'longitude',
+            'latitude',
+            'numero_volume',
+            'nombre_lots',
+            'lot1_surface_carrez',
+            'lot2_surface_carrez', 
+            'lot3_surface_carrez',
+            'lot4_surface_carrez',
+            'lot5_surface_carrez'
         ]
         
         for col in numeric_columns:
             if col in df.columns:
                 # If column is object type (string), clean it first
                 if df[col].dtype == 'object':
+                    # Convert to string first and handle missing values
+                    df[col] = df[col].astype(str)
+                    # Replace various empty representations with actual empty string
+                    df[col] = df[col].replace(['nan', 'NaN', 'None', 'null', ''], '')
                     # Remove non-numeric characters and replace commas with periods
-                    df[col] = df[col].astype(str).str.replace(',', '.', regex=False)
-                    # Use regex to extract only valid numeric patterns
+                    df[col] = df[col].str.replace(',', '.', regex=False)
+                    # Use regex to extract only valid numeric patterns, empty strings become NaN
                     df[col] = df[col].str.extract(r'([-+]?\d*\.?\d+)')[0]
                 
                 # Convert to numeric, coercing errors to NaN
                 df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Additional safety: Convert any remaining empty strings in all columns to None for database compatibility
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].replace(['', 'nan'], None)
         
         # Replace any infinite values with NaN
         df = df.replace([np.inf, -np.inf], np.nan)
@@ -354,7 +372,16 @@ def prepare_database():
             'nom_commune': 'VARCHAR(255)',
             'code_departement': 'VARCHAR(5)',
             'adresse_nom_voie': 'VARCHAR(255)',
-            'adresse_numero': 'VARCHAR(50)'
+            'adresse_numero': 'VARCHAR(50)',
+            'longitude': 'NUMERIC',
+            'latitude': 'NUMERIC',
+            'numero_volume': 'NUMERIC',
+            'nombre_lots': 'NUMERIC',
+            'lot1_surface_carrez': 'NUMERIC',
+            'lot2_surface_carrez': 'NUMERIC',
+            'lot3_surface_carrez': 'NUMERIC',
+            'lot4_surface_carrez': 'NUMERIC',
+            'lot5_surface_carrez': 'NUMERIC'
         }
         
         try:
