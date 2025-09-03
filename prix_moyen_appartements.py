@@ -542,6 +542,14 @@ def process_dataframe(df):
     import time
     start_time = time.time()
     
+    # Convert decimal.Decimal columns to float for pandas compatibility
+    numeric_columns = ['valeur_fonciere', 'surface_reelle_bati', 'surface_terrain', 'longitude', 'latitude',
+                      'lot1_surface_carrez', 'lot2_surface_carrez', 'lot3_surface_carrez', 
+                      'lot4_surface_carrez', 'lot5_surface_carrez']
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
     # Check for required columns and handle missing columns gracefully
     required_columns = ['valeur_fonciere', 'surface_reelle_bati']
     for col in required_columns:

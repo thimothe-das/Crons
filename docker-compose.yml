@@ -18,7 +18,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
+      - ./db_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dvf_user -d dvf_data"]
       interval: 10s
@@ -40,40 +40,33 @@ services:
       -c max_connections=50
       -c random_page_cost=1.1
 
-  data-importer:
+  dvf-importer:
     build:
-      context: ./data-importer
+      context: .
+      dockerfile: Dockerfile.importer
     container_name: dvf-importer
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no" # Don't restart - should run once and exit
     environment:
+      POSTGRES_HOST: postgres
       POSTGRES_USER: dvf_user
       POSTGRES_PASSWORD: dvf_password
       POSTGRES_DB: dvf_data
-      POSTGRES_HOST: postgres
-      YEARS_TO_IMPORT: "2020"
-      # Optimized for 2GB system (conservative but not too slow)
-      CSV_CHUNK_SIZE: "2000" # Good balance for 2GB
-      DOWNLOAD_CHUNK_SIZE: "8192" # Standard size
-      # Python memory optimization
-      PYTHONHASHSEED: "0"
-      MALLOC_TRIM_THRESHOLD_: "131072"
-    # Optimized for 2GB total system RAM
+      POSTGRES_PORT: "5432"
+      DVF_START_YEAR: "${DVF_START_YEAR:-2020}"
+      DVF_END_YEAR: "${DVF_END_YEAR:-2024}"
+      DVF_CHUNK_SIZE: "${DVF_CHUNK_SIZE:-5000}"
+      DVF_MAX_MEMORY: "${DVF_MAX_MEMORY:-128}"
+    volumes:
+      - ./logs:/app/logs
+    restart: "no" # Run once and exit
     deploy:
       resources:
         limits:
-          memory: 400M # ~20% of total RAM
+          memory: 768M # Increased from 256M to handle large CSV processing
         reservations:
-          memory: 200M
-    # Health checks
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f python || exit 0"]
-      interval: 20s
-      timeout: 5s
-      retries: 3
-      start_period: 45s
+          memory: 512M
 
 volumes:
   postgres_data:
