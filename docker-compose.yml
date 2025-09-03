@@ -9,6 +9,11 @@ services:
       POSTGRES_USER: dvf_user
       POSTGRES_PASSWORD: dvf_password
       POSTGRES_DB: dvf_data
+      # PostgreSQL memory optimization for 2GB system
+      POSTGRES_SHARED_BUFFERS: "128MB"
+      POSTGRES_EFFECTIVE_CACHE_SIZE: "256MB"
+      POSTGRES_WORK_MEM: "4MB"
+      POSTGRES_MAINTENANCE_WORK_MEM: "64MB"
     ports:
       - "5432:5432"
     volumes:
@@ -19,13 +24,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    # Resource limits for database
+    # Optimized for 2GB total system RAM
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 512M # ~25% of total RAM
         reservations:
-          memory: 512M
+          memory: 256M
+    command: >
+      postgres 
+      -c shared_buffers=128MB
+      -c effective_cache_size=256MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=50
+      -c random_page_cost=1.1
 
   data-importer:
     build:
@@ -41,23 +54,26 @@ services:
       POSTGRES_DB: dvf_data
       POSTGRES_HOST: postgres
       YEARS_TO_IMPORT: "2020,2021,2022,2023,2024"
-      # Memory management settings
-      CSV_CHUNK_SIZE: "3000" # Smaller chunks for memory efficiency
-      DOWNLOAD_CHUNK_SIZE: "8192"
-    # Resource limits to prevent OOM kills
+      # Optimized for 2GB system (conservative but not too slow)
+      CSV_CHUNK_SIZE: "2000" # Good balance for 2GB
+      DOWNLOAD_CHUNK_SIZE: "8192" # Standard size
+      # Python memory optimization
+      PYTHONHASHSEED: "0"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+    # Optimized for 2GB total system RAM
     deploy:
       resources:
         limits:
-          memory: 768M # Conservative memory limit
+          memory: 400M # ~20% of total RAM
         reservations:
-          memory: 256M
-    # Add health check
+          memory: 200M
+    # Health checks
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f python || exit 0"]
-      interval: 30s
-      timeout: 10s
+      interval: 20s
+      timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 45s
 
 volumes:
   postgres_data:

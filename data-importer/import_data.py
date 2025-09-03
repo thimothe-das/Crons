@@ -247,13 +247,20 @@ def import_streaming_data_to_postgres(stream_info, year, table_exists):
                         del df_chunk
                         gc.collect()
                         
-                        # Log memory usage periodically
-                        if chunk_count % 10 == 0:
+                        # Memory monitoring optimized for 2GB system
+                        if chunk_count % 8 == 0:  # Check every 8 chunks
                             memory_mb = log_memory(f"after chunk {chunk_count}")
-                            # If memory usage is getting high, force more aggressive cleanup
-                            if memory_mb > 400:  # 400MB threshold
-                                print("High memory usage detected, performing aggressive cleanup...")
+                            # Threshold optimized for 2GB system (400MB container limit)
+                            if memory_mb > 250:  # 250MB threshold - good balance for 2GB
+                                print("High memory usage detected, performing cleanup...")
                                 gc.collect()
+                                # Force Python to return memory to OS
+                                import ctypes
+                                try:
+                                    libc = ctypes.CDLL("libc.so.6")
+                                    libc.malloc_trim(0)
+                                except:
+                                    pass  # malloc_trim not available on all systems
                                 
                 except Exception as e:
                     print(f"Error reading stream: {str(e)}")
