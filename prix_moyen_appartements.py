@@ -453,7 +453,7 @@ def load_data_from_postgres(filters=None, max_price=10000000):
         
         # Step 3: Build query with filters (limit to 30 records for 2GB system)
         query_build_start = time.time()
-        query = build_postgres_query(table_name, filters, max_price, limit=30)
+        query = build_postgres_query(table_name, filters, max_price, limit=10000)
         query_build_time = time.time() - query_build_start
         print(f"Query build time: {query_build_time:.2f}s")
         print(f"Executing database query with 30 record limit for 2GB system...")
