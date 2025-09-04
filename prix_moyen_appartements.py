@@ -9,8 +9,20 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import sqlalchemy
 from sqlalchemy import create_engine, text
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+
+# Configure Flask to work behind Coolify's reverse proxy
+# This tells Flask to trust the proxy headers for HTTPS detection
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,      # Trust the X-Forwarded-For header
+    x_proto=1,    # Trust the X-Forwarded-Proto header (for HTTPS detection)
+    x_host=1,     # Trust the X-Forwarded-Host header
+    x_prefix=1    # Trust the X-Forwarded-Prefix header
+)
+
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # PostgreSQL connection settings from environment variables
@@ -700,7 +712,22 @@ def get_dvf_data():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'healthy'})
+    """Health check endpoint with debug information"""
+    debug_info = {
+        'status': 'healthy',
+        'is_secure': request.is_secure,
+        'scheme': request.scheme,
+        'host': request.host,
+        'url': request.url,
+        'headers': {
+            'X-Forwarded-Proto': request.headers.get('X-Forwarded-Proto'),
+            'X-Forwarded-For': request.headers.get('X-Forwarded-For'),
+            'X-Forwarded-Host': request.headers.get('X-Forwarded-Host'),
+            'Host': request.headers.get('Host'),
+        }
+    }
+    
+    return jsonify(debug_info)
 
 def main():
     parser = argparse.ArgumentParser(description='Analyse des prix des biens immobiliers à partir des données DVF')
