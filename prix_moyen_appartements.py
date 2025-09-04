@@ -189,66 +189,30 @@ class AnalyseDVF:
 
 
 def get_database_engine():
-    """Get a connection to the PostgreSQL database"""
-    print("Attempting to connect to PostgreSQL database...")
+    """Get a connection to the PostgreSQL database via Docker network"""
+    print("Connecting to PostgreSQL database via Docker network...")
     
-    # List of connection configurations to try
-    connection_configs = [
-        # First try Docker service name
-        {
-            'host': DB_HOST,
-            'port': DB_PORT,
-            'user': DB_USER,
-            'password': DB_PASS,
-            'db': DB_NAME
-        },
-        # Then try localhost
-        {
-            'host': 'localhost',
-            'port': DB_PORT,
-            'user': DB_USER,
-            'password': DB_PASS,
-            'db': DB_NAME
-        },
-        # Then try 127.0.0.1 explicitly (bypasses IPv6)
-        {
-            'host': '127.0.0.1',
-            'port': DB_PORT,
-            'user': DB_USER,
-            'password': DB_PASS,
-            'db': DB_NAME
-        },
-        # Finally try standard local postgres credentials as fallback
-        {
-            'host': 'localhost',
-            'port': '5432',
-            'user': 'postgres',
-            'password': 'postgres',
-            'db': 'postgres'
-        }
-    ]
+    try:
+        # Create connection string using Docker service name
+        conn_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        print(f"Connecting to: {DB_HOST}:{DB_PORT}/{DB_NAME} as {DB_USER}")
+        
+        # Create engine with connection timeout
+        engine = create_engine(conn_uri, connect_args={"connect_timeout": 10})
+        
+        # Test connection
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1")).fetchone()
+            if result and result[0] == 1:
+                print(f"✅ Successfully connected to database at {DB_HOST}:{DB_PORT}/{DB_NAME}")
+                return engine
+                
+    except Exception as e:
+        print(f"❌ Connection failed: {str(e)}")
+        print("Make sure PostgreSQL container is running with: docker-compose up -d postgres")
+        return None
     
-    for config in connection_configs:
-        try:
-            # Create connection string
-            conn_uri = f"postgresql://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['db']}"
-            print(f"Trying to connect to: {config['host']}:{config['port']}/{config['db']} as {config['user']}")
-            
-            # Create engine with shorter timeout
-            engine = create_engine(conn_uri, connect_args={"connect_timeout": 3})
-            
-            # Test connection
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT 1")).fetchone()
-                if result and result[0] == 1:
-                    print(f"✅ Successfully connected to database at {config['host']}:{config['port']}/{config['db']}")
-                    return engine
-        except Exception as e:
-            print(f"❌ Connection failed for {config['host']}: {str(e)}")
-            continue
-    
-    print("⚠️ All database connection attempts failed.")
-    print("Make sure Docker containers are running with: docker-compose up -d postgres")
+    print("⚠️ Database connection failed.")
     return None
 
 def find_dvf_table(engine):
@@ -470,7 +434,7 @@ def load_data_from_postgres(filters=None, max_price=10000000):
         # Step 1: Connect to database
         engine = get_database_engine()
         if not engine:
-            print("Failed to connect to PostgreSQL, will fall back to URL source")
+            print("Failed to connect to PostgreSQL via Docker network")
             return None
         
         connect_time = time.time() - start_time
@@ -511,7 +475,7 @@ def load_data_from_postgres(filters=None, max_price=10000000):
     
     except Exception as e:
         print(f"Error loading data from database: {str(e)}")
-        print("Will fall back to URL data source")
+        print("Database connection failed - make sure PostgreSQL container is running")
         return None
 
 def get_database_connection():
@@ -567,17 +531,17 @@ def get_dvf_data():
             filters['years'] = years.split(',')
             print(f"Filtering by years: {filters['years']}")
         
-        # Load data from PostgreSQL only - no CSV fallback
+        # Load data from PostgreSQL via Docker network
         print("Loading data from PostgreSQL...")
         df = load_data_from_postgres(filters, max_price=max_price)
         
-        # If PostgreSQL failed, return error instead of CSV fallback
-        if df is None or len(df) == 0:
-            error_message = "Database unavailable or no data found. Please run 'docker-compose up -d postgres' and ensure data has been imported."
+        # If PostgreSQL connection failed, return database error
+        if df is None:
+            error_message = "Database connection failed. Make sure PostgreSQL container is running."
             print(error_message)
             return jsonify({
                 'error': error_message,
-                'suggestion': "Run: docker-compose up -d postgres && python dvf_importer.py --start-year 2023 --end-year 2024",
+                'suggestion': "Run: docker-compose up -d postgres && docker-compose up dvf-importer",
                 'nombre_transactions': 0,
                 'nombre_transactions_affiches': 0,
                 'prix_moyen': 0,
@@ -586,6 +550,20 @@ def get_dvf_data():
                 'prix_m2_median': 0,
                 'transactions': []
             }), 500
+        
+        # If no results found, continue with empty dataset (this is valid)
+        if len(df) == 0:
+            print("No transactions found matching the specified criteria")
+            return jsonify({
+                'nombre_transactions': 0,
+                'nombre_transactions_affiches': 0,
+                'prix_moyen': 0,
+                'prix_median': 0,
+                'prix_m2_moyen': 0,
+                'prix_m2_median': 0,
+                'transactions': [],
+                'message': 'No transactions found matching the specified criteria'
+            })
         
         # Option garage filter (applies to both data sources)
         if option_garage == 'avec':
