@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 import pandas as pd
-import argparse
-import requests
-import io
 import os
 import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import json
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -40,46 +36,9 @@ class AnalyseDVF:
         self.chemin_fichier = chemin_fichier
         self.donnees = None
         
-    def telecharger_donnees(self):
-        """Télécharge les données DVF depuis l'URL fournie ou utilise un fichier local"""
-        if self.chemin_fichier and os.path.exists(self.chemin_fichier):
-            print(f"Utilisation du fichier local: {self.chemin_fichier}")
-            return
+
             
-        if not self.url_csv:
-            raise Exception("Aucune URL ou fichier local spécifié pour les données DVF")
-            
-        print(f"Téléchargement des données depuis {self.url_csv}...")
-        
-        try:
-            response = requests.get(self.url_csv)
-            if response.status_code == 200:
-                # Si aucun fichier local n'est spécifié, on crée un nom par défaut
-                if not self.chemin_fichier:
-                    self.chemin_fichier = "dvf_data.csv"
-                
-                with open(self.chemin_fichier, 'wb') as f:
-                    f.write(response.content)
-                print(f"Données téléchargées et sauvegardées dans {self.chemin_fichier}")
-            else:
-                raise Exception(f"Erreur lors du téléchargement: {response.status_code}")
-        except Exception as e:
-            raise Exception(f"Erreur lors du téléchargement: {str(e)}")
-            
-    def charger_donnees(self):
-        """Charge les données DVF dans un DataFrame pandas"""
-        if not self.chemin_fichier or not os.path.exists(self.chemin_fichier):
-            self.telecharger_donnees()
-            
-        print(f"Chargement des données depuis {self.chemin_fichier}...")
-        
-        # Déterminer le type de compression si nécessaire
-        if self.chemin_fichier.endswith('.gz'):
-            self.donnees = pd.read_csv(self.chemin_fichier, compression='gzip', low_memory=False)
-        else:
-            self.donnees = pd.read_csv(self.chemin_fichier, low_memory=False)
-            
-        print(f"Données chargées: {len(self.donnees)} transactions")
+
         
     def filtrer_donnees(self, parcelles=None, type_local=None, min_m2=None, max_m2=None, option_garage='tous'):
         """
@@ -96,7 +55,7 @@ class AnalyseDVF:
             pandas.DataFrame: Données filtrées
         """
         if self.donnees is None:
-            self.charger_donnees()
+            raise Exception("No data loaded - AnalyseDVF class is deprecated, use PostgreSQL API instead")
             
         # Copie des données pour ne pas modifier l'original
         donnees_filtrees = self.donnees.copy()
@@ -225,90 +184,9 @@ class AnalyseDVF:
             
         return resultats_par_parcelle
 
-def load_data(file_path):
-    df = pd.read_csv(file_path, delimiter=',')
-    # Filter for only apartments (type_local = 'Appartement')
-    df_apparts = df[df['type_local'] == 'Appartement']
-    
-    # Convert date_mutation to datetime
-    df_apparts['date_mutation'] = pd.to_datetime(df_apparts['date_mutation'])
-    
-    # Make sure valeur_fonciere and surface_reelle_bati are numeric
-    df_apparts['valeur_fonciere'] = pd.to_numeric(df_apparts['valeur_fonciere'], errors='coerce')
-    df_apparts['surface_reelle_bati'] = pd.to_numeric(df_apparts['surface_reelle_bati'], errors='coerce')
-    
-    # Ensure address and commune columns are available (handle potentially missing columns)
-    if 'adresse_nom_voie' not in df_apparts.columns:
-        df_apparts['adresse_nom_voie'] = "Non spécifiée"
-        print("Warning: adresse_nom_voie column not found in data, using default value")
-        
-    if 'nom_commune' not in df_apparts.columns:
-        df_apparts['nom_commune'] = "Non spécifiée"
-        print("Warning: nom_commune column not found in data, using default value")
-    
-    # Calculate price per square meter
-    df_apparts['prix_m2'] = df_apparts['valeur_fonciere'] / df_apparts['surface_reelle_bati']
-    
-    return df_apparts
 
-def load_data_from_url(url, max_price=10000000):  # Default max price of 10 million euros
-    """Load DVF data directly from a URL, supporting gzipped files"""
-    try:
-        print(f"Loading data from URL: {url}")
-        response = requests.get(url)
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch data from URL: {response.status_code}")
-        
-        # Determine if the content is gzipped
-        if url.endswith('.gz'):
-            import gzip
-            # Load CSV data from gzipped content
-            csv_data = gzip.decompress(response.content)
-            df = pd.read_csv(io.BytesIO(csv_data), delimiter=',')
-        else:
-            # Load regular CSV data from response content
-            csv_data = io.StringIO(response.content.decode('utf-8'))
-            df = pd.read_csv(csv_data, delimiter=',')
-        
-        # Filter for only apartments (type_local = 'Appartement')
-        df_apparts = df[df['type_local'] == 'Appartement']
-        
-        # Convert date_mutation to datetime
-        df_apparts['date_mutation'] = pd.to_datetime(df_apparts['date_mutation'])
-        
-        # Make sure valeur_fonciere and surface_reelle_bati are numeric
-        df_apparts['valeur_fonciere'] = pd.to_numeric(df_apparts['valeur_fonciere'], errors='coerce')
-        df_apparts['surface_reelle_bati'] = pd.to_numeric(df_apparts['surface_reelle_bati'], errors='coerce')
-        
-        # Filter out unreasonably high prices to avoid skewing statistics
-        original_count = len(df_apparts)
-        df_apparts = df_apparts[df_apparts['valeur_fonciere'] <= max_price]
-        if len(df_apparts) < original_count:
-            print(f"Filtered out {original_count - len(df_apparts)} records with prices above {max_price} euros")
-        
-        # Filter out zero or negative prices and areas
-        df_apparts = df_apparts[(df_apparts['valeur_fonciere'] > 0) & (df_apparts['surface_reelle_bati'] > 0)]
-        
-        # Ensure address and commune columns are available (handle potentially missing columns)
-        if 'adresse_nom_voie' not in df_apparts.columns:
-            df_apparts['adresse_nom_voie'] = "Non spécifiée"
-            print("Warning: adresse_nom_voie column not found in data, using default value")
-            
-        if 'nom_commune' not in df_apparts.columns:
-            df_apparts['nom_commune'] = "Non spécifiée"
-            print("Warning: nom_commune column not found in data, using default value")
-            
-        if 'adresse_numero' not in df_apparts.columns:
-            df_apparts['adresse_numero'] = ""
-            print("Warning: adresse_numero column not found in data, using default value")
-        
-        # Calculate price per square meter
-        df_apparts['prix_m2'] = df_apparts['valeur_fonciere'] / df_apparts['surface_reelle_bati']
-        
-        print(f"Data loaded from URL: {len(df_apparts)} valid records")
-        return df_apparts
-    except Exception as e:
-        raise Exception(f"Error loading data from URL: {str(e)}")
+
+
 
 def get_database_engine():
     """Get a connection to the PostgreSQL database"""
@@ -392,7 +270,7 @@ def find_dvf_table(engine):
         print(f"Error finding DVF table: {str(e)}")
         return None
 
-def build_postgres_query(table_name, filters=None, max_price=10000000):
+def build_postgres_query(table_name, filters=None, max_price=10000000, limit=50000):
     """Build SQL query with filters for DVF data with performance optimizations"""
     # Only select columns that are actually needed
     needed_columns = [
@@ -483,6 +361,12 @@ def build_postgres_query(table_name, filters=None, max_price=10000000):
         except (ValueError, TypeError):
             # Skip invalid values rather than failing
             print(f"Invalid max_surface value: {filters['max_surface']}, skipping filter")
+    
+    # Add ordering and limit for performance
+    query += f"""
+    ORDER BY date_mutation DESC, valeur_fonciere DESC
+    LIMIT {limit}
+    """
     
     return query
 
@@ -601,12 +485,12 @@ def load_data_from_postgres(filters=None, max_price=10000000):
         table_check_time = time.time() - table_check_start
         print(f"Table check time: {table_check_time:.2f}s")
         
-        # Step 3: Build query with filters
+        # Step 3: Build query with filters (limit to 50k records for performance)
         query_build_start = time.time()
-        query = build_postgres_query(table_name, filters, max_price)
+        query = build_postgres_query(table_name, filters, max_price, limit=50000)
         query_build_time = time.time() - query_build_start
         print(f"Query build time: {query_build_time:.2f}s")
-        print(f"Executing database query: {query}")
+        print(f"Executing database query with 50k record limit for performance...")
         
         # Step 4: Execute query
         query_exec_start = time.time()
@@ -683,72 +567,25 @@ def get_dvf_data():
             filters['years'] = years.split(',')
             print(f"Filtering by years: {filters['years']}")
         
-        # Step 1: Try to get data from PostgreSQL
-        print("Attempting to load data from PostgreSQL...")
+        # Load data from PostgreSQL only - no CSV fallback
+        print("Loading data from PostgreSQL...")
         df = load_data_from_postgres(filters, max_price=max_price)
         
-        # Step 2: If PostgreSQL failed, fall back to URL
+        # If PostgreSQL failed, return error instead of CSV fallback
         if df is None or len(df) == 0:
-            print("PostgreSQL data source failed or returned no data, falling back to URL source")
-            # Set default URL to the new one provided
-            dvf_url = os.getenv('DVF_API_URL', 'https://files.data.gouv.fr/geo-dvf/latest/csv/2024/full.csv.gz')
-            print(f"Using URL data source: {dvf_url}")
-            
-            # Fetch data from URL with max price filter
-            df = load_data_from_url(dvf_url, max_price=max_price)
-            print(f"Data loaded from URL: {len(df)} records")
-            
-            # Apply filters based on query parameters
-            if type_local:
-                df = df[df['type_local'] == type_local]
-                print(f"After type filter: {len(df)} records")
-            
-            if parcelles:
-                parcelles_list = [p.strip() for p in parcelles.split(',')]
-                df = df[df['id_parcelle'].isin(parcelles_list)]
-                print(f"After parcelles filter: {len(df)} records")
-            
-            # Apply postal code filter when using CSV
-            if codes_postaux:
-                codes_list = [code.strip() for code in codes_postaux.split(',')]
-                # Check if code_postal column exists in the dataframe
-                if 'code_postal' in df.columns:
-                    df = df[df['code_postal'].isin(codes_list)]
-                    print(f"After code postal filter: {len(df)} records")
-                else:
-                    print("Warning: code_postal column not found in CSV data, postal code filter skipped")
-            
-            # Apply years filter when using CSV
-            if years:
-                try:
-                    years_list = [int(y.strip()) for y in years.split(',') if y.strip().isdigit()]
-                    if years_list and 'date_mutation' in df.columns:
-                        # Make sure date_mutation is datetime type
-                        if not pd.api.types.is_datetime64_any_dtype(df['date_mutation']):
-                            df['date_mutation'] = pd.to_datetime(df['date_mutation'], errors='coerce')
-                        # Filter by years using isin
-                        df = df[df['date_mutation'].dt.year.isin(years_list)]
-                        print(f"After years filter: {len(df)} records")
-                    else:
-                        print("Warning: date_mutation column not found in CSV data or no valid years provided, years filter skipped")
-                except Exception as e:
-                    print(f"Error applying years filter: {str(e)}")
-                
-            if min_surface:
-                try:
-                    min_surface = float(min_surface)
-                    df = df[df['surface_reelle_bati'] >= min_surface]
-                    print(f"After min surface filter: {len(df)} records")
-                except ValueError:
-                    print(f"Invalid min_surface value: {min_surface}")
-                    
-            if max_surface:
-                try:
-                    max_surface = float(max_surface)
-                    df = df[df['surface_reelle_bati'] <= max_surface]
-                    print(f"After max surface filter: {len(df)} records")
-                except ValueError:
-                    print(f"Invalid max_surface value: {max_surface}")
+            error_message = "Database unavailable or no data found. Please run 'docker-compose up -d postgres' and ensure data has been imported."
+            print(error_message)
+            return jsonify({
+                'error': error_message,
+                'suggestion': "Run: docker-compose up -d postgres && python dvf_importer.py --start-year 2023 --end-year 2024",
+                'nombre_transactions': 0,
+                'nombre_transactions_affiches': 0,
+                'prix_moyen': 0,
+                'prix_median': 0,
+                'prix_m2_moyen': 0,
+                'prix_m2_median': 0,
+                'transactions': []
+            }), 500
         
         # Option garage filter (applies to both data sources)
         if option_garage == 'avec':
