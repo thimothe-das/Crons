@@ -9,11 +9,11 @@ services:
       POSTGRES_USER: dvf_user
       POSTGRES_PASSWORD: dvf_password
       POSTGRES_DB: dvf_data
-      # PostgreSQL memory optimization for 2GB system
-      POSTGRES_SHARED_BUFFERS: "128MB"
-      POSTGRES_EFFECTIVE_CACHE_SIZE: "256MB"
-      POSTGRES_WORK_MEM: "4MB"
-      POSTGRES_MAINTENANCE_WORK_MEM: "64MB"
+      # PostgreSQL memory optimization for 2GB system (conservative)
+      POSTGRES_SHARED_BUFFERS: "32MB"
+      POSTGRES_EFFECTIVE_CACHE_SIZE: "128MB"
+      POSTGRES_WORK_MEM: "1MB"
+      POSTGRES_MAINTENANCE_WORK_MEM: "16MB"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -27,17 +27,19 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M # ~25% of total RAM
+          memory: 384M # Reduced for 2GB system
         reservations:
-          memory: 256M
+          memory: 192M
     command: >
       postgres 
-      -c shared_buffers=128MB
-      -c effective_cache_size=256MB
-      -c work_mem=4MB
-      -c maintenance_work_mem=64MB
-      -c max_connections=50
+      -c shared_buffers=32MB
+      -c effective_cache_size=128MB
+      -c work_mem=1MB
+      -c maintenance_work_mem=16MB
+      -c max_connections=20
       -c random_page_cost=1.1
+      -c temp_buffers=8MB
+      -c max_stack_depth=2MB
 
   dvf-importer:
     build:
@@ -63,9 +65,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768M # Increased from 256M to handle large CSV processing
+          memory: 512M # Reduced for 2GB system
         reservations:
-          memory: 512M
+          memory: 256M
 
   flask-api:
     build:
@@ -97,9 +99,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 384M # Reduced for 2GB system
         reservations:
-          memory: 256M
+          memory: 192M
 
 volumes:
   postgres_data:

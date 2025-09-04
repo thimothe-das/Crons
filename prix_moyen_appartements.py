@@ -339,12 +339,12 @@ def build_postgres_query(table_name, filters=None, max_price=10000000, limit=30)
 def execute_postgres_query(engine, query):
     """Execute SQL query with performance optimizations and return pandas DataFrame"""
     try:
-        # Set PostgreSQL session parameters for faster query execution
+        # Set PostgreSQL session parameters optimized for 2GB system
         config_query = text("""
-            SET work_mem = '32MB';  -- Increase working memory for sorts/joins
-            SET temp_buffers = '32MB';  -- Increase temp buffer size
+            SET work_mem = '1MB';  -- Conservative memory for 2GB system
+            SET temp_buffers = '8MB';  -- Reduced temp buffer size
             SET random_page_cost = 1.1;  -- Optimize for SSDs
-            SET effective_io_concurrency = 200;  -- Increase for SSD
+            SET effective_io_concurrency = 50;  -- Reduced for limited system
             SET enable_seqscan = on;  -- Allow sequence scans
             SET enable_hashagg = on;  -- Enable hash aggregation
             SET enable_hashjoin = on;  -- Enable hash joins
@@ -451,12 +451,12 @@ def load_data_from_postgres(filters=None, max_price=10000000):
         table_check_time = time.time() - table_check_start
         print(f"Table check time: {table_check_time:.2f}s")
         
-        # Step 3: Build query with filters (limit to 50k records for performance)
+        # Step 3: Build query with filters (limit to 30 records for 2GB system)
         query_build_start = time.time()
-        query = build_postgres_query(table_name, filters, max_price, limit=50000)
+        query = build_postgres_query(table_name, filters, max_price, limit=30)
         query_build_time = time.time() - query_build_start
         print(f"Query build time: {query_build_time:.2f}s")
-        print(f"Executing database query with 50k record limit for performance...")
+        print(f"Executing database query with 30 record limit for 2GB system...")
         
         # Step 4: Execute query
         query_exec_start = time.time()
