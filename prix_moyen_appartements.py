@@ -9,19 +9,9 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import sqlalchemy
 from sqlalchemy import create_engine, text
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 
-# Configure Flask to work behind Coolify's reverse proxy
-# This tells Flask to trust the proxy headers for HTTPS detection
-app.wsgi_app = ProxyFix(
-    app.wsgi_app,
-    x_for=1,      # Trust the X-Forwarded-For header
-    x_proto=1,    # Trust the X-Forwarded-Proto header (for HTTPS detection)
-    x_host=1,     # Trust the X-Forwarded-Host header
-    x_prefix=1    # Trust the X-Forwarded-Prefix header
-)
 
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
