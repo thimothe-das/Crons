@@ -270,7 +270,7 @@ def find_dvf_table(engine):
         print(f"Error finding DVF table: {str(e)}")
         return None
 
-def build_postgres_query(table_name, filters=None, max_price=10000000, limit=50000):
+def build_postgres_query(table_name, filters=None, max_price=10000000, limit=30):
     """Build SQL query with filters for DVF data with performance optimizations"""
     # Only select columns that are actually needed
     needed_columns = [
