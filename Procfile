@@ -1,1 +1,1 @@
-web: gunicorn -w 2 -b 0.0.0.0:$PORT prix_moyen_appartements:app
+web: gunicorn -w 2 -b 0.0.0.0:$PORT --timeout 360 prix_moyen_appartements:app
