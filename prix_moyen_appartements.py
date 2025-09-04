@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, text
 app = Flask(__name__)
 
 
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # PostgreSQL connection settings from environment variables
 DB_USER = os.environ.get('POSTGRES_USER', 'dvf_user')
@@ -484,7 +484,7 @@ def get_database_connection():
     """Legacy function for backward compatibility"""
     return get_database_engine()
 
-@app.route('/api/dvf', methods=['GET'])
+@app.route('/dvf', methods=['GET'])
 def get_dvf_data():
     try:
         print("API call received to /api/dvf")
@@ -700,7 +700,7 @@ def get_dvf_data():
         traceback.print_exc()
         return jsonify({'error': error_message}), 500
 
-@app.route('/api/health', methods=['GET'])
+@app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint with debug information"""
     debug_info = {
